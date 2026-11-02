@@ -1,0 +1,118 @@
+# Pagona - a database client for MySQL, PostgreSQL, Oracle and SQL Server
+# Copyright (C) 2026 Randy Morrow
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Builds a Windows release when a version tag is pushed (v0.1.0): the
+# Release build of pagona.exe, the installer and the portable zip, attached
+# to a DRAFT GitHub release. Nothing is public until the draft is
+# published. It builds from the tag, so main is never touched; a tag on a
+# commit of another branch works the same. A trial tag (v0.1.0-rc1) makes a
+# draft pre-release. "Run workflow" on the Actions page (once this file is
+# on main) builds the same files without a release, kept as the run's
+# artifacts.
+
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version (the tag must match PagonaVersion)
+        shell: pwsh
+        run: |
+          $src = (Select-String -Path src/pgntypes.pas -Pattern "PagonaVersion = '([^']+)'").Matches[0].Groups[1].Value
+          if ("${{ github.ref_type }}" -eq "tag") {
+            # a trial tag like v0.1.0-rc1 builds 0.1.0 as a pre-release
+            $tag = ("${{ github.ref_name }}".TrimStart('v') -split '-')[0]
+            if ($tag -ne $src) { throw "The tag says $tag but src/pgntypes.pas says PagonaVersion = '$src'." }
+          }
+          "VERSION=$src" >> $env:GITHUB_ENV
+
+      - name: Install Lazarus and NSIS
+        run: choco install lazarus nsis -y --no-progress
+
+      - name: Get ZeosLib 7.2.14 and ExtTabCtrls (the versions Pagona is built with)
+        shell: pwsh
+        run: |
+          git clone --branch 7.2.14-stable https://github.com/marsupilami79/zeoslib.git ..\zeos
+          git -C ..\zeos checkout d3b2355ef95bd3c4f83433000611ff2ef2ede6f3
+          git clone https://github.com/ovidiopr/ExtTabCtrls.git ..\exttabctrls
+          git -C ..\exttabctrls checkout c2994dfe704470feabc65da37a2621e648c963e9
+
+      - name: Build pagona.exe (Release mode)
+        shell: cmd
+        run: |
+          set PATH=C:\lazarus;%PATH%
+          for %%f in (..\zeos\packages\lazarus\*.lpk) do lazbuild --add-package-link "%%f"
+          lazbuild --add-package-link ..\exttabctrls\components\exttabctrls.lpk
+          lazbuild --build-mode=Release pagona.lpi
+          if not exist bin\pagona.exe exit /b 1
+
+      - name: Installer and portable zip
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          & "C:\Program Files (x86)\NSIS\makensis.exe" /DVERSION=$env:VERSION installer\pagona.nsi
+          if ($LASTEXITCODE -ne 0) { throw "makensis failed" }
+
+          $p = "dist\Pagona-$env:VERSION-win64"
+          $r = "redist\windows-x64"
+          New-Item -ItemType Directory -Force "$p\client-libs\postgresql", "$p\client-libs\mysql" | Out-Null
+          Copy-Item bin\pagona.exe $p
+          Copy-Item LICENSE "$p\LICENSE.txt"
+          Copy-Item THIRD-PARTY-NOTICES.md, README.md $p
+          Copy-Item "$r\libpq.dll", "$r\libintl-9.dll", "$r\libiconv-2.dll", "$r\libwinpthread-1.dll", `
+            "$r\libssl-3-x64.dll", "$r\libcrypto-3-x64.dll", "$r\vcruntime140.dll" "$p\client-libs\postgresql"
+          Copy-Item "$r\libmysql.dll", "$r\libssl-3-x64.dll", "$r\libcrypto-3-x64.dll", "$r\vcruntime140.dll" `
+            "$p\client-libs\mysql"
+          Set-Content "$p\client-libs\README.txt" @"
+          These are optional. To use one, copy the files in its folder next to pagona.exe,
+          or point the connection's Client library field at the copy here.
+          Leave them out if this PC already has the client library its other software needs.
+          "@
+          Compress-Archive -Path $p -DestinationPath "dist\Pagona-$env:VERSION-win64.zip" -Force
+
+          # checksums, so a download can be checked against the release
+          $sums = Get-ChildItem dist -File | Where-Object { $_.Extension -in '.exe', '.zip' } | ForEach-Object {
+            "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower(), $_.Name
+          }
+          Set-Content dist\SHA256SUMS.txt $sums
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Pagona-${{ env.VERSION }}-windows
+          path: |
+            dist/*.exe
+            dist/*.zip
+            dist/SHA256SUMS.txt
+
+      - name: Draft release
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $pre = @()
+          if ("${{ github.ref_name }}".Contains('-')) { $pre = @('--prerelease') }
+          $notes = @"
+          Pagona $env:VERSION for Windows (64-bit).
+
+          - **Pagona-$env:VERSION-setup.exe**: the installer (needs an administrator; installs for all users).
+          - **Pagona-$env:VERSION-win64.zip**: the portable copy.
+          - **SHA256SUMS.txt**: checksums of both.
+
+          Built from this repository's source by GitHub Actions (see the Actions tab). Not code-signed:
+          Windows SmartScreen will ask the first time; choose More info, then Run anyway.
+          "@
+          gh release create "${{ github.ref_name }}" "dist\Pagona-$env:VERSION-setup.exe" "dist\Pagona-$env:VERSION-win64.zip" `
+            "dist\SHA256SUMS.txt" --draft --title "Pagona ${{ github.ref_name }}" --notes "$notes" --generate-notes @pre
