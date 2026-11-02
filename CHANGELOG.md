@@ -2,6 +2,16 @@
 
 Each change is a git commit.
 
+## 0.1.1: the About picture
+- The About box showed a blocky, broken peahen on Windows. pagona.ico's
+  pictures lacked the transparency mask every icon picture should carry;
+  the file is rebuilt with them. The About box now uses the 256-pixel PNG
+  built into the program (src/pgnaboutlogo.inc), decoded and scaled by
+  Pagona itself instead of read from the app icon.
+- On Linux (GTK3) the LCL writes bitmap colors with red and blue swapped;
+  the About box checks one pixel and corrects for it.
+- Version 0.1.1 in pagona.exe's Windows properties.
+
 ## 0.1.0: first Windows release
 - License: GPL 3 or later (LICENSE, a notice at the top of every source
   file, THIRD-PARTY-NOTICES.md for the libraries).

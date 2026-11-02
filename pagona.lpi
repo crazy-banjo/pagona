@@ -21,7 +21,8 @@
     <VersionInfo>
       <UseVersionInfo Value="True"/>
       <MinorVersionNr Value="1"/>
-      <StringTable CompanyName="Randy Morrow" FileDescription="Pagona database client" InternalName="pagona" LegalCopyright="Copyright (C) 2026 Randy Morrow. GPL-3.0-or-later." OriginalFilename="pagona.exe" ProductName="Pagona" ProductVersion="0.1.0"/>
+      <RevisionNr Value="1"/>
+      <StringTable CompanyName="Randy Morrow" FileDescription="Pagona database client" InternalName="pagona" LegalCopyright="Copyright (C) 2026 Randy Morrow. GPL-3.0-or-later." OriginalFilename="pagona.exe" ProductName="Pagona" ProductVersion="0.1.1"/>
     </VersionInfo>
     <BuildModes>
       <Item Name="Default" Default="True"/>

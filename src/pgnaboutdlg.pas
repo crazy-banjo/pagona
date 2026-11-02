@@ -19,11 +19,126 @@ interface
 
 uses
   Classes, SysUtils, Types, Forms, Controls, Graphics, StdCtrls, ExtCtrls, LCLIntf,
-  pgnTypes, pgnTheme;
+  IntfGraphics, FPImage, FPReadPNG, GraphType, pgnTypes, pgnTheme;
 
 procedure ShowAbout(AOwner: TComponent);
 
 implementation
+
+{$I pgnaboutlogo.inc}
+
+{ The built-in peahen PNG as a bitmap APixels square, its transparent
+  corners blended onto ABack. Decoded and scaled here (each pixel the
+  average of the PNG pixels it covers) rather than by the widget set, so it
+  looks the same everywhere. }
+{ True when colors written into a bitmap's image data come back with red
+  and blue swapped (the LCL's GTK3 widget set reports the wrong byte order;
+  Windows doesn't). Tested on one pixel rather than assumed per platform. }
+function SwapsRedBlue: Boolean;
+var
+  Img: TLazIntfImage;
+  Bmp: TBitmap;
+  Col: TFPColor;
+begin
+  Img := TLazIntfImage.Create(0, 0);
+  Bmp := TBitmap.Create;
+  try
+    Img.DataDescription := GetDescriptionFromDevice(0, 1, 1);
+    Img.SetSize(1, 1);
+    Col.Red := $FFFF;
+    Col.Green := 0;
+    Col.Blue := 0;
+    Col.Alpha := alphaOpaque;
+    Img.Colors[0, 0] := Col;
+    Bmp.LoadFromIntfImage(Img);
+    Result := Blue(ColorToRGB(Bmp.Canvas.Pixels[0, 0])) > Red(ColorToRGB(Bmp.Canvas.Pixels[0, 0]));
+  finally
+    Bmp.Free;
+    Img.Free;
+  end;
+end;
+
+function LogoBitmap(APixels: Integer; ABack: TColor): TBitmap;
+var
+  Swap: Boolean;
+  T: Word;
+  Src, Dst: TLazIntfImage;
+  Reader: TFPReaderPNG;
+  Stream: TMemoryStream;
+  X, Y, SX, SY, X0, X1, Y0, Y1, N: Integer;
+  R, G, B, A, BR, BG, BB: Double;
+  Col: TFPColor;
+  Back: TColor;
+begin
+  Back := ColorToRGB(ABack);
+  BR := Red(Back) * 257;
+  BG := Green(Back) * 257;
+  BB := Blue(Back) * 257;
+  Src := TLazIntfImage.Create(0, 0, [riqfRGB, riqfAlpha]);
+  Dst := TLazIntfImage.Create(0, 0);
+  Reader := TFPReaderPNG.Create;
+  Stream := TMemoryStream.Create;
+  try
+    Stream.WriteBuffer(AboutLogoPNG[0], Length(AboutLogoPNG));
+    Stream.Position := 0;
+    Src.LoadFromStream(Stream, Reader);
+    Swap := SwapsRedBlue;
+    Dst.DataDescription := GetDescriptionFromDevice(0, APixels, APixels);
+    Dst.SetSize(APixels, APixels);
+    for Y := 0 to APixels - 1 do
+    begin
+      Y0 := Y * Src.Height div APixels;
+      Y1 := (Y + 1) * Src.Height div APixels;
+      if Y1 <= Y0 then
+      begin
+        Y1 := Y0 + 1;
+      end;
+      for X := 0 to APixels - 1 do
+      begin
+        X0 := X * Src.Width div APixels;
+        X1 := (X + 1) * Src.Width div APixels;
+        if X1 <= X0 then
+        begin
+          X1 := X0 + 1;
+        end;
+        R := 0;
+        G := 0;
+        B := 0;
+        N := 0;
+        for SY := Y0 to Y1 - 1 do
+        begin
+          for SX := X0 to X1 - 1 do
+          begin
+            Col := Src.Colors[SX, SY];
+            A := Col.Alpha / 65535;
+            R := R + Col.Red * A + BR * (1 - A);
+            G := G + Col.Green * A + BG * (1 - A);
+            B := B + Col.Blue * A + BB * (1 - A);
+            Inc(N);
+          end;
+        end;
+        Col.Red := Round(R / N);
+        Col.Green := Round(G / N);
+        Col.Blue := Round(B / N);
+        Col.Alpha := alphaOpaque;
+        if Swap then
+        begin
+          T := Col.Red;
+          Col.Red := Col.Blue;
+          Col.Blue := T;
+        end;
+        Dst.Colors[X, Y] := Col;
+      end;
+    end;
+    Result := TBitmap.Create;
+    Result.LoadFromIntfImage(Dst);
+  finally
+    Stream.Free;
+    Reader.Free;
+    Dst.Free;
+    Src.Free;
+  end;
+end;
 
 type
   TAboutHelper = class
@@ -43,6 +158,7 @@ var
   BOK: TButton;
   Helper: TAboutHelper;
   X, Y, W: Integer;
+  Logo: TBitmap;
 begin
   Helper := TAboutHelper.Create;
   F := TForm.CreateNew(AOwner);
@@ -58,11 +174,14 @@ begin
     Img := TImage.Create(F);
     Img.Parent := F;
     Img.SetBounds(F.Scale96ToScreen(24), F.Scale96ToScreen(24), F.Scale96ToScreen(128), F.Scale96ToScreen(128));
-    Img.Stretch := True;
-    Img.Proportional := True;
     try
-      Application.Icon.Current := Application.Icon.GetBestIndexForSize(Size(256, 256));
-      Img.Picture.Icon.Assign(Application.Icon);
+      // the 256-pixel PNG built into the program, not the app icon
+      Logo := LogoBitmap(Img.Width, F.Color);
+      try
+        Img.Picture.Assign(Logo);
+      finally
+        Logo.Free;
+      end;
     except
       on E: Exception do
       begin
