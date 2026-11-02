@@ -146,8 +146,8 @@ type
 
 const
   { The release number: also in pagona.lpi (Version Info) and the tag a
-    release is built from (v0.1.0). }
-  PagonaVersion = '0.1.0';
+    release is built from (v0.1.1). }
+  PagonaVersion = '0.1.1';
   PagonaCopyright = 'Copyright (C) 2026 Randy Morrow';
   PagonaSourceURL = 'https://github.com/crazy-banjo/pagona';
 
