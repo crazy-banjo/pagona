@@ -51,9 +51,10 @@ Priority order set by Randy (2026-10-21, reordered 2026-10-23).
   Convert Again asks before replacing hand edits in After; Copy and Save
   As take After as edited; the report says when After was edited by hand.
   Open question: with a selection, run only the selection (as F5 does)?
-- Object browser: the font size can't be changed where it shows code (a
-  table's CREATE statement is very small). Needs a way to change it
-  (Randy, 2026-11-06).
+- Object Browser (Amphibian; Object Explorer in Seattle, the Explorer in
+  Plume): the font size can't be changed where it shows code (a table's
+  CREATE statement is very small). Needs a way to change it (Randy,
+  2026-11-06).
 - Oracle/PostgreSQL Compatibility, Run Both and Compare: the run uses the
   tab's own session without a savepoint, so with auto-commit off a query
   that fails on PostgreSQL leaves the tab's transaction aborted (Roll Back
