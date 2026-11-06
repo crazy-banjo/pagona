@@ -68,6 +68,16 @@ type
     Info: TpgnRoutineInfo; // from the data dictionary (Found = False without a connection)
   end;
 
+  { A schema name in front of tables, functions and columns (SATURN.SPRIDEN),
+    with what was found and changed. }
+  TpgnConvSchema = record
+    Name: string;          // as Oracle reads it (SATURN; a quoted name as written inside the quotes)
+    Tables: Integer;       // FROM SATURN.SPRIDEN, JOIN, INTO, UPDATE ...
+    Funcs: Integer;        // SATURN.F_GET_NAME(...), SATURN.PKG.F(...)
+    Others: Integer;       // SATURN.SPRIDEN.SPRIDEN_ID, SATURN.SEQ.NEXTVAL
+    Changed: Integer;      // places removed or renamed
+  end;
+
   { One thing done or marked, for the report. }
   TpgnConvFinding = record
     Rule: TpgnConvRule;
@@ -84,6 +94,9 @@ type
   public
     Rules: TpgnConvRules;
     SkipSchemas: TStringList;     // schemas whose functions get no TODO PG note
+    { Schema names to remove or rename: SATURN= removes it, SATURN=banner
+      renames it. Schemas not listed stay as written. }
+    SchemaMap: TStringList;
     Columns: TpgnColumnLookup;    // may be nil
     Routines: TpgnRoutineLookup;  // may be nil
     // results
@@ -91,6 +104,11 @@ type
     Funcs: array of TpgnConvFunc;
     Findings: array of TpgnConvFinding;
     Notes: TStringList;
+    Schemas: array of TpgnConvSchema;
+    { X in X.f(...) that could be a package or a schema (no Oracle
+      connection to ask): left as written. }
+    Unsure: TStringList;
+    KnownSchemas: TStringList;    // the names in Schemas, while converting
     constructor Create;
     destructor Destroy; override;
     procedure Reset;
@@ -99,10 +117,20 @@ type
     function SchemaCalls: TStringList;
     function AppliedIn(AGroup: TpgnConvGroup): Integer;
     function RoutineOf(const AName: string; out AInfo: TpgnRoutineInfo): Boolean;
+    function SchemaIndex(const AName: string): Integer;
+    { Places a schema name was removed or renamed, all schemas. }
+    function SchemaChanges: Integer;
   end;
 
 const
   TodoPG = '/* TODO PG: ';
+
+{ How a schema name is written: as is when PostgreSQL reads it that way
+  unquoted (banner, BANNER), otherwise in double quotes. }
+function SchemaPrefixText(const AName: string): string;
+
+{ One schema's counts in words: "4 tables, 1 function". }
+function SchemaCountText(const ASchema: TpgnConvSchema): string;
 
 function RuleInfo(ARule: TpgnConvRule): TpgnRuleInfo;
 
@@ -358,6 +386,12 @@ begin
   inherited Create;
   SkipSchemas := TStringList.Create;
   SkipSchemas.CaseSensitive := False;
+  SchemaMap := TStringList.Create;
+  SchemaMap.CaseSensitive := False;
+  Unsure := TStringList.Create;
+  Unsure.CaseSensitive := False;
+  KnownSchemas := TStringList.Create;
+  KnownSchemas.CaseSensitive := False;
   Notes := TStringList.Create;
   Rules := DefaultConvRules;
 end;
@@ -365,6 +399,9 @@ end;
 destructor TpgnConvJob.Destroy;
 begin
   SkipSchemas.Free;
+  SchemaMap.Free;
+  Unsure.Free;
+  KnownSchemas.Free;
   Notes.Free;
   inherited Destroy;
 end;
@@ -380,7 +417,60 @@ begin
   end;
   Funcs := nil;
   Findings := nil;
+  Schemas := nil;
+  Unsure.Clear;
+  KnownSchemas.Clear;
   Notes.Clear;
+end;
+
+function TpgnConvJob.SchemaIndex(const AName: string): Integer;
+var
+  I: Integer;
+begin
+  Result := -1;
+  for I := 0 to High(Schemas) do
+  begin
+    if SameText(Schemas[I].Name, AName) then
+    begin
+      Result := I;
+      Exit;
+    end;
+  end;
+end;
+
+function TpgnConvJob.SchemaChanges: Integer;
+var
+  I: Integer;
+begin
+  Result := 0;
+  for I := 0 to High(Schemas) do
+  begin
+    Inc(Result, Schemas[I].Changed);
+  end;
+end;
+
+function SchemaPrefixText(const AName: string): string;
+var
+  K: Integer;
+  Simple: Boolean;
+begin
+  Simple := (AName <> '') and (AName[1] in ['A'..'Z', 'a'..'z', '_']) and
+    ((AName = LowerCase(AName)) or (AName = UpperCase(AName)));
+  for K := 2 to Length(AName) do
+  begin
+    if not (AName[K] in ['A'..'Z', 'a'..'z', '0'..'9', '_', '$']) then
+    begin
+      Simple := False;
+    end;
+  end;
+  if Simple then
+  begin
+    Result := AName;
+  end
+  else
+  begin
+    Result := '"' + StringReplace(AName, '"', '""', [rfReplaceAll]) + '"';
+  end;
 end;
 
 function TpgnConvJob.FuncIndex(const AName: string): Integer;
@@ -449,6 +539,14 @@ type
     Text: string;
   end;
 
+  { A schema name in front of something: its token and the dot after it. }
+  TSchemaRef = record
+    Tok, Dot: Integer;
+    Name: string;
+    Kind: Integer;   // 0 table, 1 function, 2 column or sequence
+  end;
+  TSchemaRefs = array of TSchemaRef;
+
   { One statement: its text, tokens and paren depths. }
   TStmt = class
   public
@@ -481,6 +579,11 @@ type
     function ArgKind(const AArg: TArg): Char;
     function NvlMixed(I: Integer): Boolean;
     function EndIncl(K: Integer): Integer;
+    function IsNamePart(I: Integer): Boolean;
+    function PartName(I: Integer): string;
+    function ClauseOf(I: Integer): string;
+    function IsTablePlace(I: Integer): Boolean;
+    function SchemaRefs(AKnown: TStringList; ANote: Boolean): TSchemaRefs;
   end;
 
 procedure TStmt.Load(const AText: string);
@@ -905,6 +1008,10 @@ begin
   if (U(Pv(I)) = '.') and IsWord(Pv(Pv(I))) then
   begin
     K := OperandStart(I);
+    if IsTablePlace(K) then
+    begin
+      Exit;   // INSERT INTO SATURN.SPRIDEN (...): a table and its columns
+    end;
     AName := UpperCase(StringReplace(Src(K, I), ' ', '', [rfReplaceAll]));
     if Job.RoutineOf(AName, AInfo) and AInfo.Found then
     begin
@@ -922,7 +1029,7 @@ begin
     Exit;
   end;
   W := T[I].Up;
-  if IsBuiltinFunc(W) then
+  if IsBuiltinFunc(W) or IsTablePlace(I) then
   begin
     Exit;
   end;
@@ -940,6 +1047,149 @@ begin
   begin
     AName := W;
     Result := True;
+  end;
+end;
+
+{ A part of a dotted name: a word that isn't a keyword, or a quoted name. }
+function TStmt.IsNamePart(I: Integer): Boolean;
+begin
+  Result := (I >= 0) and (I <= High(T)) and (((T[I].Kind = tkWord) and (Copy(T[I].Text, 1, 1) <> ':') and
+    not IsSqlKeyword(T[I].Up)) or ((T[I].Kind = tkQuoted) and (Copy(T[I].Text, 1, 1) = '"')));
+end;
+
+{ The name as Oracle reads it: a word in upper case, a quoted name as
+  written inside the quotes. }
+function TStmt.PartName(I: Integer): string;
+begin
+  if T[I].Kind = tkQuoted then
+  begin
+    Result := StringReplace(Copy(T[I].Text, 2, Length(T[I].Text) - 2), '""', '"', [rfReplaceAll]);
+  end
+  else
+  begin
+    Result := T[I].Up;
+  end;
+end;
+
+{ The clause token I is in, at its own depth: FROM, SELECT, WHERE, ... }
+function TStmt.ClauseOf(I: Integer): string;
+var
+  K: Integer;
+  W: string;
+begin
+  Result := '';
+  K := I;
+  while K >= 0 do
+  begin
+    if (Depth[K] = Depth[I]) and (T[K].Kind = tkWord) then
+    begin
+      W := T[K].Up;
+      if (W = 'FROM') or (W = 'SELECT') or (W = 'WHERE') or (W = 'GROUP') or (W = 'ORDER') or
+        (W = 'HAVING') or (W = 'SET') or (W = 'ON') or (W = 'VALUES') or (W = 'CONNECT') or
+        (W = 'START') or (W = 'RETURNING') or (W = 'INTO') or (W = 'USING') or (W = 'WITH') then
+      begin
+        Result := W;
+        Exit;
+      end;
+    end;
+    Dec(K);
+  end;
+end;
+
+{ True when the name starting at I names a table or view: after FROM, JOIN,
+  INTO, UPDATE, USING, TABLE, VIEW, DELETE, or a comma in a FROM list. }
+function TStmt.IsTablePlace(I: Integer): Boolean;
+var
+  P: Integer;
+  W: string;
+begin
+  P := Pv(I);
+  W := U(P);
+  Result := (W = 'FROM') or (W = 'JOIN') or (W = 'INTO') or (W = 'UPDATE') or (W = 'USING') or
+    (W = 'TABLE') or (W = 'VIEW') or (W = 'DELETE');
+  if not Result and (W = ',') then
+  begin
+    Result := ClauseOf(P) = 'FROM';
+  end;
+end;
+
+{ The schema names in this statement. A table's (FROM SATURN.SPRIDEN) and
+  a package function's (SATURN.PKG.F(...)) are always schemas; SATURN.F(...)
+  when the data dictionary says it's a function in that schema, or when
+  SATURN is a schema elsewhere in the SQL (AKnown); a three-part column or
+  sequence (SATURN.SPRIDEN.SPRIDEN_ID, SATURN.SEQ.NEXTVAL) the same way.
+  ANote: X.f(...) that can't be told apart goes in Job.Unsure. }
+function TStmt.SchemaRefs(AKnown: TStringList; ANote: Boolean): TSchemaRefs;
+var
+  I, B, C, N, Kind: Integer;
+  Nm, W: string;
+  Info: TpgnRoutineInfo;
+  Asked: Boolean;
+begin
+  Result := nil;
+  N := 0;
+  for I := 0 to High(T) do
+  begin
+    if not IsNamePart(I) or (U(Nx(I)) <> '.') or not IsNamePart(Nx(Nx(I))) or (U(Pv(I)) = '.') then
+    begin
+      Continue;
+    end;
+    Nm := PartName(I);
+    B := Nx(Nx(I));
+    Kind := -1;
+    if U(Nx(B)) = '.' then
+    begin
+      // three parts
+      C := Nx(Nx(B));
+      if not (IsNamePart(C) or (U(C) = '*')) or (U(Nx(C)) = '.') then
+      begin
+        Continue;
+      end;
+      W := U(C);
+      if U(Nx(C)) = '(' then
+      begin
+        Kind := 1;   // schema.package.function
+      end
+      else if (W = 'NEXTVAL') or (W = 'CURRVAL') or (AKnown.IndexOf(Nm) >= 0) then
+      begin
+        Kind := 2;
+      end;
+    end
+    else if IsTablePlace(I) then
+    begin
+      Kind := 0;   // INSERT INTO SATURN.SPRIDEN (...) too
+    end
+    else if U(Nx(B)) = '(' then
+    begin
+      // schema.function or package.function
+      Asked := Job.RoutineOf(Nm + '.' + PartName(B), Info);
+      if Asked and Info.Found then
+      begin
+        if (Info.PackageName = '') and SameText(Info.Owner, Nm) then
+        begin
+          Kind := 1;
+        end;
+      end
+      else if AKnown.IndexOf(Nm) >= 0 then
+      begin
+        Kind := 1;
+      end
+      else if ANote and not Asked and (Job.Unsure.IndexOf(Nm) < 0) and (Copy(Nm, 1, 5) <> 'DBMS_') and
+        (Copy(Nm, 1, 4) <> 'UTL_') then
+      begin
+        Job.Unsure.Add(Nm);
+      end;
+    end;
+    if Kind < 0 then
+    begin
+      Continue;
+    end;
+    SetLength(Result, N + 1);
+    Result[N].Tok := I;
+    Result[N].Dot := Nx(I);
+    Result[N].Name := Nm;
+    Result[N].Kind := Kind;
+    Inc(N);
   end;
 end;
 
@@ -2367,6 +2617,7 @@ var
   Lead, Nm, Sch: string;
   Info: TpgnRoutineInfo;
   G: TpgnConvGroup;
+  Refs: TSchemaRefs;
 begin
   Result := AText;
   St := TStmt.Create;
@@ -2476,10 +2727,139 @@ begin
         end;
       end;
     until not Found or (Iter > 5000);
+    // schema names last, so the rules above saw the names as written
+    if AJob.SchemaMap.Count > 0 then
+    begin
+      St.Load(St.S);
+      Refs := St.SchemaRefs(AJob.KnownSchemas, False);
+      for K := High(Refs) downto 0 do
+      begin
+        F := AJob.SchemaMap.IndexOfName(Refs[K].Name);
+        if F < 0 then
+        begin
+          Continue;
+        end;
+        Nm := AJob.SchemaMap.ValueFromIndex[F];
+        if Nm = '' then
+        begin
+          Lead := '';
+        end
+        else
+        begin
+          Lead := SchemaPrefixText(Nm) + '.';
+        end;
+        St.S := Copy(St.S, 1, St.T[Refs[K].Tok].StartPos - 1) + Lead + Copy(St.S, St.T[Refs[K].Dot].EndPos + 1,
+          MaxInt);
+        F := AJob.SchemaIndex(Refs[K].Name);
+        if F >= 0 then
+        begin
+          Inc(AJob.Schemas[F].Changed);
+        end;
+      end;
+    end;
     Result := St.S;
   finally
     St.Free;
   end;
+end;
+
+{ The schema names in the SQL, counted: first the ones that are surely
+  schemas (tables, package functions, looked-up functions), then every
+  place those names are used. }
+procedure ScanSchemas(const AText: string; const ASpans: TpgnStatementSpans; AJob: TpgnConvJob);
+var
+  St: TStmt;
+  Pass, I, K, F: Integer;
+  Refs: TSchemaRefs;
+begin
+  St := TStmt.Create;
+  try
+    St.Job := AJob;
+    for Pass := 1 to 2 do
+    begin
+      for I := 0 to High(ASpans) do
+      begin
+        St.Load(Copy(AText, ASpans[I].StartPos, ASpans[I].EndPos - ASpans[I].StartPos + 1));
+        if StatementKind(St) <> 1 then
+        begin
+          Continue;
+        end;
+        Refs := St.SchemaRefs(AJob.KnownSchemas, Pass = 2);
+        for K := 0 to High(Refs) do
+        begin
+          if Pass = 1 then
+          begin
+            if AJob.KnownSchemas.IndexOf(Refs[K].Name) < 0 then
+            begin
+              AJob.KnownSchemas.Add(Refs[K].Name);
+            end;
+            Continue;
+          end;
+          F := AJob.SchemaIndex(Refs[K].Name);
+          if F < 0 then
+          begin
+            F := Length(AJob.Schemas);
+            SetLength(AJob.Schemas, F + 1);
+            AJob.Schemas[F] := Default(TpgnConvSchema);
+            AJob.Schemas[F].Name := Refs[K].Name;
+          end;
+          case Refs[K].Kind of
+            0:
+              begin
+                Inc(AJob.Schemas[F].Tables);
+              end;
+            1:
+              begin
+                Inc(AJob.Schemas[F].Funcs);
+              end;
+          else
+            begin
+              Inc(AJob.Schemas[F].Others);
+            end;
+          end;
+        end;
+      end;
+    end;
+    // a name that turned out to be a schema isn't in doubt
+    for K := AJob.Unsure.Count - 1 downto 0 do
+    begin
+      if AJob.KnownSchemas.IndexOf(AJob.Unsure[K]) >= 0 then
+      begin
+        AJob.Unsure.Delete(K);
+      end;
+    end;
+  finally
+    St.Free;
+  end;
+end;
+
+function SchemaCountText(const ASchema: TpgnConvSchema): string;
+
+  procedure Part(N: Integer; const AOne, AMany: string);
+  begin
+    if N = 0 then
+    begin
+      Exit;
+    end;
+    if Result <> '' then
+    begin
+      Result := Result + ', ';
+    end;
+    if N = 1 then
+    begin
+      Result := Result + '1 ' + AOne;
+    end
+    else
+    begin
+      Result := Result + IntToStr(N) + ' ' + AMany;
+    end;
+  end;
+
+begin
+  Result := '';
+  Part(ASchema.Tables, 'table', 'tables');
+  Part(ASchema.Funcs, 'function', 'functions');
+  Part(ASchema.Others, 'column or sequence', 'columns or sequences');
 end;
 
 function ConvertOracleToAnsi(const AText: string; AJob: TpgnConvJob): string;
@@ -2516,6 +2896,7 @@ begin
     end;
     // then each statement
     Spans := SplitStatements(Joined, sdOracle);
+    ScanSchemas(Joined, Spans, AJob);
     Result := '';
     Last := 1;
     for I := 0 to High(Spans) do
@@ -2604,6 +2985,31 @@ begin
       finally
         Sch.Free;
       end;
+    end;
+    // schema names
+    for I := 0 to High(AJob.Schemas) do
+    begin
+      K := AJob.SchemaMap.IndexOfName(AJob.Schemas[I].Name);
+      if K < 0 then
+      begin
+        Continue;
+      end;
+      if AJob.SchemaMap.ValueFromIndex[K] = '' then
+      begin
+        Line := 'Schema name ' + AJob.Schemas[I].Name + ' removed';
+      end
+      else
+      begin
+        Line := 'Schema name ' + AJob.Schemas[I].Name + ' changed to ' +
+          SchemaPrefixText(AJob.SchemaMap.ValueFromIndex[K]);
+      end;
+      AJob.Notes.Add(Line + ': ' + IntToStr(AJob.Schemas[I].Changed) + ' place(s) (' +
+        SchemaCountText(AJob.Schemas[I]) + ').');
+    end;
+    if (AJob.Unsure.Count > 0) and (Length(AJob.Schemas) > 0) then
+    begin
+      AJob.Notes.Add('Left as written, package or schema (no Oracle connection to ask): ' +
+        AJob.Unsure.CommaText + '.');
     end;
   finally
     JoinNotes.Free;

@@ -46,7 +46,9 @@ type
     FBackendPid: Int64;
     FVersion: string;
     FSchema: string;
+    FSearchPath: string;   // the session's search_path schemas, comma separated
     FAutoCommit: Boolean;
+    procedure ReadSearchPath(AConn: TZConnection);
     procedure Configure(AConn: TZConnection);
     function MetaResult(const ASQL: string): TpgnResultSet;
     function MetaStrings(const ASQL: string): TpgnStringArray;
@@ -93,6 +95,7 @@ type
     function SessionPerDatabase: Boolean; override;
     function ListSchemas(ASystem: Boolean): TpgnStringArray; override;
     function CurrentSchema: string; override;
+    function SearchPath: TpgnStringArray; override;
     procedure UseSchema(const ASchema: string); override;
     function ExtraFolders(ALevel: TpgnFolderLevel; AMore: Boolean): TpgnStringArray; override;
     function ListFolder(const AContainer, AFolder: string): TpgnStringArray; override;
@@ -300,6 +303,31 @@ begin
     end;
   finally
     R.Free;
+  end;
+  ReadSearchPath(FConn);
+end;
+
+{ The schemas the session looks unqualified names up in ($user resolved,
+  schemas that don't exist left out). }
+procedure TpgnPostgresAdapter.ReadSearchPath(AConn: TZConnection);
+var
+  R: TpgnResultSet;
+begin
+  try
+    R := RunStatement(AConn, 'SELECT array_to_string(current_schemas(false), '','')', 0);
+    try
+      if R.RowCount > 0 then
+      begin
+        FSearchPath := R.Rows[0].Values[0];
+      end;
+    finally
+      R.Free;
+    end;
+  except
+    on E: Exception do
+    begin
+      // it stays as it was
+    end;
   end;
 end;
 
@@ -555,6 +583,24 @@ begin
   Result := FSchema;
 end;
 
+function TpgnPostgresAdapter.SearchPath: TpgnStringArray;
+var
+  Parts: TStringArray;
+  I: Integer;
+begin
+  Result := nil;
+  if FSearchPath = '' then
+  begin
+    Exit;
+  end;
+  Parts := FSearchPath.Split([',']);
+  SetLength(Result, Length(Parts));
+  for I := 0 to High(Parts) do
+  begin
+    Result[I] := Parts[I];
+  end;
+end;
+
 { Unqualified names are looked up in the schema, then in public (where
   extensions usually put their functions). }
 procedure TpgnPostgresAdapter.UseSchema(const ASchema: string);
@@ -562,10 +608,12 @@ begin
   if (ASchema = '') or (ASchema = 'public') then
   begin
     FConn.ExecuteDirect('SET search_path TO public');
+    FSearchPath := 'public';
   end
   else
   begin
     FConn.ExecuteDirect('SET search_path TO ' + QuoteIdent(ASchema) + ', public');
+    FSearchPath := ASchema + ',public';
   end;
   FSchema := ASchema;
 end;
@@ -2379,6 +2427,7 @@ begin
         // the picker just stays as it was
       end;
     end;
+    ReadSearchPath(FConn);
   end;
 end;
 

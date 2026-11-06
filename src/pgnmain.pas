@@ -361,6 +361,7 @@ type
     procedure AddTargets(ATab: TpgnQueryTab; ADialect: TpgnDialect; AEngine: TpgnEngine;
       var ATargets: TpgnCompareTargets);
     function ConvertForReview(AJob: TpgnConvJob): string;
+    procedure SetConvFormat(const AOpt: TpgnFormatOptions);
     function LookupRoutine(const AName: string; out AInfo: TpgnRoutineInfo): Boolean;
     function EditorDialect(ATab: TpgnQueryTab): TpgnDialect;
     function LookupColumns(const ATable: string): TStrings;
@@ -6617,6 +6618,13 @@ begin
   Result := FormatSql(Done, sdOracle, FConvOpt, Skipped);
 end;
 
+{ The Compatibility window's Format drop-down: the profile After is laid
+  out with (the window only; the main menu's profile stays). }
+procedure TpgnMainForm.SetConvFormat(const AOpt: TpgnFormatOptions);
+begin
+  FConvOpt := AOpt;
+end;
+
 { A stored function, from the lookup session's data dictionary; each name
   once per review (the window converts again on every tick). False when
   there's no Oracle session to ask. }
@@ -6757,6 +6765,9 @@ begin
   end;
   FConvSource := Src;
   FConvOpt := CurrentFormatProfile(FSettings).Opt;
+  Setup.Profiles := LoadFormatProfiles(FSettings.SharedFormatFolder);
+  Setup.ProfileIndex := Max(0, ProfileIndex(Setup.Profiles, FSettings.FormatProfile));
+  Setup.SetFormat := @SetConvFormat;
   FRoutineNames := TStringList.Create;
   FRoutineNames.Sorted := False;
   FRoutineInfos := nil;
@@ -6771,7 +6782,7 @@ begin
       finally
         Screen.Cursor := crDefault;
       end;
-      Any := Length(Probe.Funcs) > 0;
+      Any := (Length(Probe.Funcs) > 0) or (Length(Probe.Schemas) > 0);
       for R := Low(TpgnConvRule) to High(TpgnConvRule) do
       begin
         if Probe.Counts[R] > 0 then

@@ -2,6 +2,29 @@
 
 Each change is a git commit.
 
+## Next release (not released yet)
+- Oracle/PostgreSQL Compatibility, Schema names (under "Could change what
+  a query returns"): one box per schema the SQL names (SATURN.  (3 tables,
+  1 function)), unticked to start. Ticked, the name comes off everywhere
+  that schema is used: tables and views, function calls, three-part
+  columns and sequences (SATURN.SPRIDEN.SPRIDEN_ID, SATURN.SEQ.NEXTVAL),
+  quoted names too. The drop-down under it says what happens: Remove the
+  name, or a schema to put in its place, picked from the PostgreSQL
+  connection's schemas or typed (a name that needs quotes gets them).
+  Packages (looked up on the Oracle connection), PL/SQL blocks, strings and
+  comments are left alone; without an Oracle connection, X.f(...) that
+  could be a package or a schema is left as written and listed in the log.
+  The log and the report say how many places changed and what the
+  PostgreSQL connection has: whether the schema is there, and for a removed
+  name whether it's in the session's search_path.
+- Oracle/PostgreSQL Compatibility, Format: a drop-down after the After
+  caption picks the format profile After is laid out with, from the same
+  list as the Format window. It starts on the profile used last and applies
+  to this window only.
+- Fixed: Oracle/PostgreSQL Compatibility no longer took INSERT INTO
+  schema.table (columns) for a function call (it added a TODO PG note after
+  the column list).
+
 ## 0.2.5: SQL formatter, Oracle/PostgreSQL Compatibility, code completion
 - Edit > Format SQL... (Ctrl+Shift+F in Plume and Amphibian, Ctrl+K
   Ctrl+F in Seattle; also on the editor's right-click menu) opens the

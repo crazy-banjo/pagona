@@ -36,6 +36,9 @@ function ShowFormatWindow(AOwner: TComponent; ASettings: TpgnSettings; const ASo
 { The profile Format uses without the window (Format with "..."). }
 function CurrentFormatProfile(ASettings: TpgnSettings): TpgnFormatProfile;
 
+{ A profile as the lists show it: "Pagona Default  (built in)", "Name  (shared)". }
+function ProfileCaption(const P: TpgnFormatProfile): string;
+
 implementation
 
 type

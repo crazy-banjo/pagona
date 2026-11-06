@@ -127,6 +127,9 @@ type
     function ListSchemas(ASystem: Boolean): TpgnStringArray; virtual;
     { The schema unqualified names are looked up in; '' if none. }
     function CurrentSchema: string; virtual;
+    { Every schema unqualified names are looked up in, in order (PostgreSQL's
+      search_path, the schemas that exist); nil where there's no such list. }
+    function SearchPath: TpgnStringArray; virtual;
     procedure UseSchema(const ASchema: string); virtual;
     { A new, connected session like this one on another database. }
     function NewSession(const ADatabase: string): TpgnAdapter; virtual;
@@ -527,6 +530,11 @@ end;
 function TpgnAdapter.CurrentSchema: string;
 begin
   Result := '';
+end;
+
+function TpgnAdapter.SearchPath: TpgnStringArray;
+begin
+  Result := nil;
 end;
 
 procedure TpgnAdapter.UseSchema(const ASchema: string);
