@@ -2,7 +2,182 @@
 
 Each change is a git commit.
 
-## 0.1.1: the About picture
+## 0.2.5: SQL formatter, Oracle/PostgreSQL Compatibility, code completion
+- Edit > Format SQL... (Ctrl+Shift+F in Plume and Amphibian, Ctrl+K
+  Ctrl+F in Seattle; also on the editor's right-click menu) opens the
+  Format window on the profile used last: its settings on the left, your
+  own SQL (the selection or the whole editor) formatted on the right as
+  you change them. Format (Enter) puts it in the editor as one Undo step;
+  Cancel changes nothing. Only the layout changes (spaces, line breaks,
+  indentation, keyword case): each statement's words are compared before
+  and after, and a statement that would change in anything else is left
+  exactly as written. Comments, hints, strings and quoted names stay as
+  written; statements Pagona doesn't lay out (GRANT, ALTER, SQL*Plus
+  lines, PostgreSQL function bodies) too. PL/SQL, T-SQL (IF/ELSE, BEGIN
+  TRY/CATCH, no ; needed) and MySQL routines indent by their blocks.
+- Edit > Format with "<profile>" (Ctrl+Alt+F in Plume and Amphibian,
+  Ctrl+K Ctrl+D in Seattle): formats right away with the last profile, no
+  window. Undo puts it back.
+- Format profiles: named sets of settings (keyword case, indent 2/4/tab,
+  trailing or leading commas, one column per line or packed to a width,
+  AND/OR on new lines, JOIN indented, river style, blank line between
+  statements). Pagona Default is built in (UPPER, 4 spaces, commas at line
+  end). Save, Save As..., Rename... and Delete for your own profiles;
+  Export... and Import... of .pagona-format files (small JSON files to
+  email, post or commit). Changing a setting without saving is fine:
+  Format uses what's on screen and the profile stays as it was.
+- Options > Shared format profiles folder (optional): a team's
+  .pagona-format files, listed as (shared). Read-only unless the folder
+  can be written; replacing a shared file asks first, naming the folder
+  (default: Don't Replace). Pagona never deletes a file in the shared
+  folder: those are removed by hand. No profile is required: you choose.
+- Edit > Join Lines: each statement on one line, comments removed (hints
+  kept), for jobs, shell scripts and report expressions.
+- Edit > Oracle/PostgreSQL Compatibility... (any tab, connected anywhere
+  or not: editing SQL doesn't need a connection): rewrites Oracle-only SQL as SQL that runs on
+  both Oracle 19c and PostgreSQL, so a report can be checked on Oracle now
+  and moved to PostgreSQL later as it is. The selection or the whole
+  editor; PL/SQL blocks and SQL*Plus lines are left alone; converting
+  converted SQL again changes nothing more.
+- The window lists the rules found in this SQL, each with a checkbox and a
+  count (ticks start fresh each time), and re-makes the After side as you
+  tick. Before and after side by side, and what was done, with Export
+  HTML... and Export CSV... right under it. The editor is never changed:
+  Copy takes the converted SQL, Save As... writes it to a new file
+  (suggested name: the tab's file with _pg added; the original file is
+  refused), Close closes.
+- Two connections: Oracle (from) and PostgreSQL (to), each a drop-down of
+  this tab's session, the other connected query tabs (by tab name) and the
+  connections open in the Explorer, with the
+  environment's badge (PROD, TEST, DEV, in words and color). The window
+  works without either; testing needs PostgreSQL.
+- Run Both and Compare (one SELECT): runs the original on Oracle and the
+  converted SQL on PostgreSQL, then shows the first 100 rows of each side
+  by side. Rows are matched ignoring order, numbers by value, dates and
+  times in one form, empty text the same as NULL (Oracle can't store ''),
+  trailing spaces ignored; a row with no match on the other side is marked
+  with ≠, and one line says what was found in plain words (Same rows: 5
+  from each. / Different: 1 row only in Oracle, 1 only in PostgreSQL).
+  Respects the row limit, with Compare All Rows. Without an Oracle
+  connection only the converted SQL runs. Running on a production
+  connection asks first, default Don't Run.
+- Same meaning, runs on both (ticked to start): (+) joins to LEFT JOIN ...
+  ON, query block by query block, filters on the outer-joined table moved
+  into its ON, plain comma joins to JOIN ... ON (unqualified Banner columns
+  are tied to their table by name, or on a connected tab by the tables' own
+  columns); NVL to COALESCE; NVL2 and DECODE to CASE (a NULL search becomes IS
+  NULL); WHERE ROWNUM <= n to FETCH FIRST n ROWS ONLY where it means the
+  same (no ORDER BY, GROUP BY, DISTINCT or aggregate); date +/- n days to
+  INTERVAL 'n' DAY; SYSDATE to LOCALTIMESTAMP; SYSTIMESTAMP to
+  CURRENT_TIMESTAMP; VARCHAR2 / NUMBER in CAST to VARCHAR / NUMERIC;
+  TO_NUMBER(x) to CAST(x AS NUMERIC); a name for each subquery in FROM.
+- Could change what a query returns (unticked to start, with the reason):
+  quoting numbers compared with Banner's _CODE and _ID columns
+  (stvterm_code = 202640); COALESCE(x, '') around pieces of a ||
+  concatenation (Oracle skips a NULL, PostgreSQL makes the whole string
+  NULL).
+- PostgreSQL only (unticked to start; the result no longer runs on Oracle
+  19c): the
+  exact PostgreSQL form for FROM DUAL (removed), LISTAGG (string_agg),
+  MINUS (EXCEPT), sequences (nextval('seq')), REGEXP_REPLACE (with 'g'),
+  INSTR(x, y) (strpos), SUBSTR(x, -n) (right, NULL when x is shorter, as
+  in Oracle), TRUNC of a date to day, month, year, quarter, hour, minute or
+  ISO week (date_trunc), LAST_DAY and NEXT_DAY (keeping the time of day).
+  Each was run on PostgreSQL 16 against Oracle's documented results.
+- Notes only, marked /* TODO PG: ... */ with the PostgreSQL form written
+  out (search for "TODO PG" at move time): LISTAGG, TRUNC of a date,
+  ADD_MONTHS (month ends differ), MONTHS_BETWEEN (Oracle gives fractions),
+  LAST_DAY, NEXT_DAY, date - date and other date math to check, MINUS,
+  FROM DUAL, sequences, CONNECT BY, REGEXP_SUBSTR / INSTR / COUNT / LIKE
+  (PostgreSQL 15+), REGEXP_REPLACE, INSTR, SUBSTR from the end or of a
+  date, NVL with two types (left as NVL: COALESCE needs one type, on Oracle
+  too), TO_CHAR / TO_DATE without a format or with RR, ROWNUM that can't
+  convert, ROWID, SYS_CONTEXT / USERENV, PL/SQL blocks, and a (+) block
+  that can't be rewritten faithfully ((+) with OR or IN, a table
+  outer-joined to two tables, (+) inside a function, correlated
+  conditions, a column it can't tie to a table, SELECT * when tables would
+  have to be reordered).
+- Stored functions: one TODO PG note per function per statement, at its
+  first call, with the number of calls (HACCINST1.FH_GET_SORTEST_SCORE (11
+  calls)). A checkbox per schema (Mark HACCINST1 functions, Mark BANINST1
+  functions). On an Oracle connection each function is looked up in the
+  data dictionary: schema and package, parameters and their types, return
+  type, versions, status, last change and the tables it reads (never its
+  source). The return type also decides whether an NVL can become
+  COALESCE.
+- Export HTML... (one self-contained page: what was done, every TODO PG and
+  PostgreSQL only replacement with its line, the functions called, the
+  converted SQL) and Export CSV... (one row per finding). No function
+  source code is ever read into either.
+- Describe (F4 in Amphibian, Alt+F1 in Plume and Seattle) on a function in
+  a package (gb_common.f_x) describes that function, not the whole
+  package; functions, procedures, packages and views get a Uses page (the
+  tables and code they read).
+- Code completion: type a dot after a table's name or alias (s.) and its
+  columns are listed; after a schema's name, its tables and views. Edit >
+  Complete Code (Ctrl+Space; Ctrl+J too in Seattle) asks for the list
+  anywhere: after a dot the same, otherwise the names in the editor and the
+  database's tables. Keep typing to narrow it; Enter or Tab puts the name
+  in, a space, comma or dot just keeps typing, Esc closes it. Names come in
+  the case you're typing. Lookups are kept for the tab's session; with no
+  connection (or while a query runs) the list has the names already
+  written after that alias in the editor. Options > Code completion turns
+  it off.
+- Result grid: sort and filter in each column's header. Click a column's
+  title to sort (again for descending, a third time for off; Shift+click
+  adds a column); the ▽ at its right edge filters (contains, equals,
+  starts with, is empty, ... or tick the values to show). ▲/▼ with the
+  sort order and a boxed ▼ mark the columns in use, and the status line
+  says how many rows are shown. Copy and Copy with Headers take what's
+  shown. Sort and filters stay when the query is run again; the ✕ in the
+  grid's corner (or right-click > Clear Sort and Filters) clears them all.
+- An error's line: the message says where (ERROR at line 3, column 12);
+  double-click it in Messages to go there. PostgreSQL's LINE and ^, Oracle's
+  line and column and ORA-00904's name, MySQL's near ... at line n, and SQL
+  Server's near ... are all read.
+- Run Statement on a comment line runs the statement the comment belongs
+  to (the one right below it), as Toad does; the log says which.
+- PostgreSQL: after an error in a transaction, every statement fails with
+  "current transaction is aborted" until Rollback. That's PostgreSQL's
+  rule, and Pagona keeps it, as psql does. The log now says so plainly
+  when it happens, and asks whether to roll back now (default Leave It).
+  Options > On error, roll back (PostgreSQL), like psql's
+  ON_ERROR_ROLLBACK: Off (PostgreSQL's way, the default), Interactive (only
+  statements you run by hand), On (scripts too) undoes only the failed
+  statement and keeps the transaction going.
+- Amphibian: the Schema Browser is now the Object Browser.
+
+## 0.1.1: polish before the Linux build (folded into 0.2.5)
+- Database and schema drop-downs you can type into (Schema Browser, each
+  tab's bar, the Seattle and Amphibian toolbars): the list narrows to the
+  names that contain what's typed; Up/Down, Enter, Esc; the arrow, F4 or
+  Alt+Down shows them all.
+- Schema Browser: a Type drop-down instead of the row of buttons (the
+  rarely used types below a line); the details follow the pick, including
+  the first row when a list loads (it used to look picked and show
+  nothing) and a click on the row already picked; the details clear when
+  nothing is picked. Typing a letter in the list starts the filter with
+  it; Down or Enter in the filter goes to the list.
+- Object Explorer: typing jumps to the next shown name that starts with
+  what's typed (the same letter again moves on).
+- Describe window's +: a search box; names show as you type, Enter or
+  a double-click adds one; a name typed in full still works (synonyms).
+- Describe (F4 / Alt+F1) on a qualified column (notes.body) describes the
+  table.
+- File > Recent Files (the last ten, opened or saved; a file that's gone
+  is taken off the list; a file already open brings its tab forward).
+- Go to Line (Ctrl+G).
+- Zoom: Ctrl+wheel, Ctrl+= / Ctrl+- / Ctrl+0 and View > Zoom In / Zoom Out
+  / Reset Zoom, for every editor at once, remembered.
+- The editor boxes the bracket matching the one at the cursor, and shades
+  and boxes the other uses of the word at the cursor (keywords left out).
+- Reopen last session's tabs (Options, on by default): files come back
+  from disk; never-saved tabs keep their text without asking at close;
+  each tab says which connection it was on and comes back not connected.
+- A lost connection (server restart, network drop, idle timeout, session
+  killed) asks: Reconnect and Run Again (from the statement that failed),
+  Reconnect, or Not Now. With changes that were waiting for Commit, they
+  went with the old session, so it only offers Reconnect.
 - The About box showed a blocky, broken peahen on Windows. pagona.ico's
   pictures lacked the transparency mask every icon picture should carry;
   the file is rebuilt with them. The About box now uses the 256-pixel PNG
@@ -10,7 +185,7 @@ Each change is a git commit.
   Pagona itself instead of read from the app icon.
 - On Linux (GTK3) the LCL writes bitmap colors with red and blue swapped;
   the About box checks one pixel and corrects for it.
-- Version 0.1.1 in pagona.exe's Windows properties.
+- Version 0.2.5 in pagona.exe's Windows properties.
 
 ## 0.1.0: first Windows release
 - License: GPL 3 or later (LICENSE, a notice at the top of every source

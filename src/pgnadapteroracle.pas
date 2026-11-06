@@ -95,6 +95,8 @@ type
     function GetRoutineSQL(const ADatabase, AName: string; AKind: TpgnRoutineKind): string; override;
     function RoutineExists(const ADatabase, AName: string; AKind: TpgnRoutineKind): Boolean; override;
     function DescribeParameters(const ADatabase, AName: string): TpgnResultSet; override;
+    function DescribeUses(const ADatabase, AName: string): TpgnResultSet; override;
+    function DescribeRoutine(const AName, ADefault: string): TpgnRoutineInfo; override;
     function DescribeTriggers(const ADatabase, ATable: string): TpgnResultSet; override;
     function DescribeGrants(const ADatabase, AName, AObjectWord: string): TpgnResultSet; override;
     function SaveRoutine(const ADatabase, AOldName: string; AKind: TpgnRoutineKind;
@@ -1362,15 +1364,277 @@ begin
 end;
 
 function TpgnOracleAdapter.DescribeParameters(const ADatabase, AName: string): TpgnResultSet;
+var
+  Pkg, Obj, PkgCond: string;
 begin
+  // PKG.MEMBER: a function or procedure in a package
+  if Pos('.', AName) > 0 then
+  begin
+    Pkg := Copy(AName, 1, Pos('.', AName) - 1);
+    Obj := Copy(AName, Pos('.', AName) + 1, MaxInt);
+    PkgCond := ' AND a.package_name = ' + L(Pkg);
+  end
+  else
+  begin
+    Obj := AName;
+    PkgCond := ' AND a.package_name IS NULL';
+  end;
   Result := MetaResult(
     'SELECT CASE WHEN a.argument_name IS NULL AND a.position = 0 THEN ''RETURNS'' ' +
     'WHEN a.in_out = ''IN/OUT'' THEN ''INOUT'' ELSE a.in_out END AS "Mode", ' +
     'NVL(a.argument_name, '' '') AS "Parameter", ' +
     'a.data_type || CASE WHEN a.type_name IS NOT NULL THEN '' '' || a.type_owner || ''.'' || a.type_name END ' +
-    'AS "Type" FROM all_arguments a WHERE a.owner = ' + L(ADatabase) + ' AND a.object_name = ' + L(AName) +
-    ' AND a.package_name IS NULL AND a.data_level = 0 AND (a.argument_name IS NOT NULL OR a.position = 0) ' +
-    'AND a.data_type IS NOT NULL ORDER BY a.position');
+    'AS "Type" FROM all_arguments a WHERE a.owner = ' + L(ADatabase) + ' AND a.object_name = ' + L(Obj) +
+    PkgCond + ' AND a.data_level = 0 AND (a.argument_name IS NOT NULL OR a.position = 0) ' +
+    'AND a.data_type IS NOT NULL ORDER BY NVL(a.overload, ''0''), a.position');
+end;
+
+{ What the object reads: the tables, views and code it depends on (for a
+  package member, the whole package body's). SYS objects are left out. }
+function TpgnOracleAdapter.DescribeUses(const ADatabase, AName: string): TpgnResultSet;
+var
+  N: string;
+begin
+  N := AName;
+  if Pos('.', N) > 0 then
+  begin
+    N := Copy(N, 1, Pos('.', N) - 1);
+  end;
+  Result := MetaResult(
+    'SELECT DISTINCT d.referenced_owner AS "Schema", d.referenced_name AS "Name", ' +
+    'INITCAP(d.referenced_type) AS "Type" FROM all_dependencies d ' +
+    'WHERE d.owner = ' + L(ADatabase) + ' AND d.name = ' + L(N) +
+    ' AND d.referenced_owner <> ''SYS'' AND d.referenced_name <> ''STANDARD'' ORDER BY 3, 1, 2');
+end;
+
+{ Finds what a call names, as Oracle would: schema.pkg.name; schema.name or
+  pkg.name (the schema's own function first, then a package of that name
+  in the default schema, its private synonym, a public synonym, any
+  schema); name (the default schema's own, then its synonym, then a public
+  one). Only the data dictionary is read; never the source. }
+function TpgnOracleAdapter.DescribeRoutine(const AName, ADefault: string): TpgnRoutineInfo;
+var
+  Parts: TStringArray;
+  Def, A, B, Owner, Pkg, Obj, ObjOf, Ov, FirstOv, Typ: string;
+  R: TpgnResultSet;
+  I, NOv: Integer;
+
+  function PkgCond: string;
+  begin
+    if Pkg = '' then
+    begin
+      Result := 'package_name IS NULL';
+    end
+    else
+    begin
+      Result := 'package_name = ' + L(Pkg);
+    end;
+  end;
+
+begin
+  Result := Default(TpgnRoutineInfo);
+  Result.Name := AName;
+  Owner := '';
+  Pkg := '';
+  Obj := '';
+  Def := UpperCase(ADefault);
+  try
+    if Def = '' then
+    begin
+      Def := UpperCase(CurrentSchema);
+    end;
+    Parts := AName.Split(['.']);
+    if Length(Parts) = 3 then
+    begin
+      Owner := OraName(Parts[0]);
+      Pkg := OraName(Parts[1]);
+      Obj := OraName(Parts[2]);
+    end
+    else if Length(Parts) = 2 then
+    begin
+      A := OraName(Parts[0]);
+      B := OraName(Parts[1]);
+      if MetaValue('SELECT COUNT(*) FROM all_objects WHERE owner = ' + L(A) + ' AND object_name = ' + L(B) +
+        ' AND object_type IN (''FUNCTION'', ''PROCEDURE'')') <> '0' then
+      begin
+        Owner := A;
+        Obj := B;
+      end
+      else
+      begin
+        R := MetaResult(
+          'SELECT owner, object_name, 1 AS pri FROM all_objects WHERE owner = ' + L(Def) +
+          ' AND object_name = ' + L(A) + ' AND object_type = ''PACKAGE''' +
+          ' UNION ALL SELECT table_owner, table_name, 2 FROM all_synonyms WHERE owner = ' + L(Def) +
+          ' AND synonym_name = ' + L(A) +
+          ' UNION ALL SELECT table_owner, table_name, 3 FROM all_synonyms WHERE owner = ''PUBLIC''' +
+          ' AND synonym_name = ' + L(A) +
+          ' UNION ALL SELECT owner, object_name, 4 FROM all_objects WHERE object_name = ' + L(A) +
+          ' AND object_type = ''PACKAGE'' ORDER BY 3, 1');
+        try
+          if R.RowCount > 0 then
+          begin
+            Owner := R.Rows[0].Values[0];
+            Pkg := R.Rows[0].Values[1];
+            Obj := B;
+          end;
+        finally
+          R.Free;
+        end;
+      end;
+    end
+    else if Length(Parts) = 1 then
+    begin
+      B := OraName(Parts[0]);
+      R := MetaResult(
+        'SELECT owner, object_name, 1 AS pri FROM all_objects WHERE owner = ' + L(Def) +
+        ' AND object_name = ' + L(B) + ' AND object_type IN (''FUNCTION'', ''PROCEDURE'')' +
+        ' UNION ALL SELECT table_owner, table_name, 2 FROM all_synonyms WHERE owner = ' + L(Def) +
+        ' AND synonym_name = ' + L(B) +
+        ' UNION ALL SELECT table_owner, table_name, 3 FROM all_synonyms WHERE owner = ''PUBLIC''' +
+        ' AND synonym_name = ' + L(B) + ' ORDER BY 3, 1');
+      try
+        if R.RowCount > 0 then
+        begin
+          Owner := R.Rows[0].Values[0];
+          Obj := R.Rows[0].Values[1];
+        end;
+      finally
+        R.Free;
+      end;
+    end;
+    if (Owner = '') or (Obj = '') then
+    begin
+      Result.Note := 'Not found, or not visible to this login.';
+      Exit;
+    end;
+    Result.Owner := Owner;
+    Result.PackageName := Pkg;
+    Result.Name := Obj;
+    // the signature: the first version's arguments (position 0 is a function's result)
+    R := MetaResult(
+      'SELECT NVL(overload, ''0''), position, argument_name, in_out, data_type, type_owner, type_name ' +
+      'FROM all_arguments WHERE owner = ' + L(Owner) + ' AND object_name = ' + L(Obj) + ' AND ' + PkgCond +
+      ' AND data_level = 0 ORDER BY NVL(overload, ''0''), position');
+    try
+      if R.RowCount = 0 then
+      begin
+        if Pkg <> '' then
+        begin
+          Result.Note := 'Not found in package ' + Owner + '.' + Pkg + ', or not visible to this login.';
+        end
+        else
+        begin
+          Result.Note := 'Not found, or not visible to this login.';
+        end;
+        Exit;
+      end;
+      FirstOv := R.Rows[0].Values[0];
+      NOv := 1;
+      Ov := FirstOv;
+      for I := 0 to R.RowCount - 1 do
+      begin
+        if R.Rows[I].Values[0] <> Ov then
+        begin
+          Ov := R.Rows[I].Values[0];
+          Inc(NOv);
+        end;
+        if R.Rows[I].Values[0] <> FirstOv then
+        begin
+          Continue;
+        end;
+        Typ := R.Rows[I].Values[4];
+        if (not R.Rows[I].Nulls[6]) and (R.Rows[I].Values[6] <> '') then
+        begin
+          Typ := R.Rows[I].Values[5] + '.' + R.Rows[I].Values[6];
+        end;
+        if (R.Rows[I].Values[1] = '0') and (R.Rows[I].Nulls[2] or (R.Rows[I].Values[2] = '')) then
+        begin
+          Result.ReturnType := Typ;
+        end
+        else if not R.Rows[I].Nulls[2] and (R.Rows[I].Values[2] <> '') then
+        begin
+          if Result.Params <> '' then
+          begin
+            Result.Params := Result.Params + ', ';
+          end;
+          Result.Params := Result.Params + R.Rows[I].Values[2] + ' ' + R.Rows[I].Values[3] + ' ' + Typ;
+        end;
+      end;
+      Result.Overloads := NOv;
+    finally
+      R.Free;
+    end;
+    if Result.ReturnType <> '' then
+    begin
+      Result.Kind := 'FUNCTION';
+    end
+    else
+    begin
+      Result.Kind := 'PROCEDURE';
+    end;
+    Result.Found := True;
+    // status and last change: the package body's for a package member
+    if Pkg <> '' then
+    begin
+      ObjOf := Pkg;
+    end
+    else
+    begin
+      ObjOf := Obj;
+    end;
+    R := MetaResult(
+      'SELECT object_type, status, TO_CHAR(last_ddl_time, ''YYYY-MM-DD HH24:MI'') FROM all_objects ' +
+      'WHERE owner = ' + L(Owner) + ' AND object_name = ' + L(ObjOf) +
+      ' AND object_type IN (''FUNCTION'', ''PROCEDURE'', ''PACKAGE'', ''PACKAGE BODY'') ' +
+      'ORDER BY CASE object_type WHEN ''PACKAGE BODY'' THEN 0 ELSE 1 END');
+    try
+      if R.RowCount > 0 then
+      begin
+        Result.Status := R.Rows[0].Values[1];
+        Result.LastChanged := R.Rows[0].Values[2];
+        if (Pkg <> '') and (R.Rows[0].Values[0] <> 'PACKAGE BODY') then
+        begin
+          Result.Note := 'The package body isn''t visible to this login (the status is the specification''s).';
+        end;
+      end;
+    finally
+      R.Free;
+    end;
+    // what it reads
+    R := MetaResult(
+      'SELECT DISTINCT referenced_owner || ''.'' || referenced_name FROM all_dependencies ' +
+      'WHERE owner = ' + L(Owner) + ' AND name = ' + L(ObjOf) +
+      ' AND type IN (''FUNCTION'', ''PROCEDURE'', ''PACKAGE BODY'')' +
+      ' AND referenced_type IN (''TABLE'', ''VIEW'', ''MATERIALIZED VIEW'', ''SYNONYM'')' +
+      ' AND referenced_owner <> ''SYS'' ORDER BY 1');
+    try
+      for I := 0 to R.RowCount - 1 do
+      begin
+        if Result.Reads <> '' then
+        begin
+          Result.Reads := Result.Reads + ', ';
+        end;
+        Result.Reads := Result.Reads + R.Rows[I].Values[0];
+      end;
+    finally
+      R.Free;
+    end;
+    if (Result.Reads <> '') and (Pkg <> '') then
+    begin
+      Result.Reads := Result.Reads + ' (the whole package)';
+    end
+    else if Result.Reads = '' then
+    begin
+      Result.Reads := '(none this login can see)';
+    end;
+  except
+    on E: Exception do
+    begin
+      Result.Found := False;
+      Result.Note := 'Could not look it up: ' + E.Message;
+    end;
+  end;
 end;
 
 function TpgnOracleAdapter.DescribeTriggers(const ADatabase, ATable: string): TpgnResultSet;

@@ -5,7 +5,9 @@
 # Builds a Windows release when a version tag is pushed (v0.1.0): the
 # Release build of pagona.exe, the installer and the portable zip, attached
 # to a DRAFT GitHub release. Nothing is public until the draft is
-# published. It builds from the tag, so main is never touched; a tag on a
+# published. The usual way: on the Releases page, Draft a new release, type
+# the tag (v0.2.5) and choose Create new tag, then publish; this workflow
+# then adds the files to that release a few minutes later. It builds from the tag, so main is never touched; a tag on a
 # commit of another branch works the same. A trial tag (v0.1.0-rc1) makes a
 # draft pre-release. "Run workflow" on the Actions page (once this file is
 # on main) builds the same files without a release, kept as the run's
@@ -33,7 +35,8 @@ jobs:
           $src = (Select-String -Path src/pgntypes.pas -Pattern "PagonaVersion = '([^']+)'").Matches[0].Groups[1].Value
           if ("${{ github.ref_type }}" -eq "tag") {
             # a trial tag like v0.1.0-rc1 builds 0.1.0 as a pre-release
-            $tag = ("${{ github.ref_name }}".TrimStart('v') -split '-')[0]
+            # (a stray dot after the v, v.0.2.5, is forgiven)
+            $tag = ("${{ github.ref_name }}".TrimStart('v').TrimStart('.') -split '-')[0]
             if ($tag -ne $src) { throw "The tag says $tag but src/pgntypes.pas says PagonaVersion = '$src'." }
           }
           "VERSION=$src" >> $env:GITHUB_ENV
@@ -114,5 +117,18 @@ jobs:
           Built from this repository's source by GitHub Actions (see the Actions tab). Not code-signed:
           Windows SmartScreen will ask the first time; choose More info, then Run anyway.
           "@
-          gh release create "${{ github.ref_name }}" "dist\Pagona-$env:VERSION-setup.exe" "dist\Pagona-$env:VERSION-win64.zip" `
-            "dist\SHA256SUMS.txt" --draft --title "Pagona ${{ github.ref_name }}" --notes "$notes" --generate-notes @pre
+          $files = @("dist\Pagona-$env:VERSION-setup.exe", "dist\Pagona-$env:VERSION-win64.zip", "dist\SHA256SUMS.txt")
+          # a release made on the Releases page (which made the tag): add the
+          # files to it, and the notes when it has none
+          gh release view "${{ github.ref_name }}" --json body --jq .body > existing.txt 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload "${{ github.ref_name }}" @files --clobber
+            if ($LASTEXITCODE -ne 0) { throw "upload failed" }
+            if ((Get-Content existing.txt -Raw).Trim() -eq '') {
+              gh release edit "${{ github.ref_name }}" --notes "$notes"
+            }
+          }
+          else {
+            gh release create "${{ github.ref_name }}" @files --draft --title "Pagona ${{ github.ref_name }}" `
+              --notes "$notes" --generate-notes @pre
+          }

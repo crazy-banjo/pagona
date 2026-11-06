@@ -38,13 +38,14 @@ interface
 
 uses
   Classes, SysUtils, Forms, Controls, Graphics, Dialogs, StdCtrls, ExtCtrls,
-  ComCtrls, ActnList, Menus, LCLType, Clipbrd, Grids,
-  SynEdit, SynEditKeyCmds, SynEditTypes,
+  ComCtrls, ActnList, Menus, LCLType, Clipbrd, Grids, Math,
+  SynEdit, SynEditKeyCmds, SynEditTypes, pgnFindCombo,
   pgnTypes, pgnAdapter, pgnAdapters, pgnConnections, pgnSettings, pgnKeymap,
   ExtTabCtrl, ExtTabCtrlDrawing, ExtPageCtrl,
   pgnSqlSplit, pgnConnectDlg, pgnOptionsDlg, pgnScriptGen, pgnQueryTab,
   pgnTheme, pgnToolbar, pgnStatusBar, pgnResultGrid, pgnRoutineDlg, SynHighlighterSQL, pgnDbaLog,
-  pgnAmphibian, pgnIcons, Process, pgnConnectWin, pgnPendingWin, pgnMenuColor, pgnAdapterMSSQL, pgnDescribeWin, pgnAboutDlg;
+  pgnAmphibian, pgnIcons, Process, pgnConnectWin, pgnPendingWin, pgnMenuColor, pgnAdapterMSSQL, pgnDescribeWin, pgnAboutDlg, pgnSession,
+  pgnSqlFormat, pgnJoinConvert, pgnConvertWin, pgnFormatProfiles, pgnFormatDlg, fpjson, pgnOracleConvert;
 
 type
   TpgnDetailsPage = (dpColumns, dpIndexes, dpTriggers, dpParameters, dpDefinition, dpGrants);
@@ -110,6 +111,8 @@ type
     FToolBar: TpgnToolbar;
     FExplorerPanel: TPanel;
     FTree: TTreeView;
+    FTypeAhead: string;          // letters typed in the Object Explorer tree
+    FTypeAheadAt: QWord;         // when the last one was typed
     FFilterEdit: TEdit;
     FFilterTimer: TTimer;
     FFoundList: TpgnResultGrid;      // filter results, shown in place of the tree
@@ -164,6 +167,14 @@ type
     FActToggleComment, FActUpper, FActLower: TAction;
     FActComment, FActUncomment, FActBlockComment: TAction;
     FActIndent, FActOutdent, FActFind, FActFindNext, FActReplace: TAction;
+    FActGoToLine, FActZoomIn, FActZoomOut, FActZoomReset: TAction;
+    FActFormat, FActFormatQuick, FActJoinLines, FActConvertJoins, FActComplete: TAction;
+    FLookupAdapter: TpgnAdapter;   // Convert: the tab's session, for column lookups
+    FConvSource: string;           // Convert: the SQL being reviewed
+    FConvOpt: TpgnFormatOptions;   // Convert: the format profile's settings
+    FRoutineNames: TStringList;    // Convert: functions looked up (upper case) ...
+    FRoutineInfos: array of TpgnRoutineInfo;   // ... and what was found
+    FRecentMenu: TMenuItem;      // File > Recent Files
     FActSchemaBrowser, FActShowEditor: TAction;
     FActPending: TAction;
     FCommitMenu: TPopupMenu;          // Commit's drop arrow
@@ -184,13 +195,14 @@ type
     FEditorBar: TpgnToolbar;
     FPickPanel: TPanel;
     FPickLabels: array[0..2] of TLabel;
-    FPicks: array[0..2] of TComboBox;
+    FPicks: array[0..2] of TpgnFindCombo;
     FMirrorTimer: TTimer;
     FMirroring: Boolean;
     FBrowser: TpgnSchemaBrowser;
     FDescribeWin: TpgnDescribeWindow;   // the one Describe window, while open
     FBrowserShown: Boolean;
     FCloseChecked: Boolean;
+    FClosingApp: Boolean;        // the close questions are for closing Pagona
     FExplorerSplitter: TSplitter;
     FPendingLayout: string;           // closing to restart: the questions were asked
     FLastTabOf: TStringList;          // connection id -> the tab last used on it
@@ -284,6 +296,18 @@ type
     procedure DoIndent(Sender: TObject);
     procedure DoOutdent(Sender: TObject);
     procedure DoFind(Sender: TObject);
+    procedure DoGoToLine(Sender: TObject);
+    procedure SaveSessionNow;
+    procedure RestoreSession;
+    procedure DoZoom(Sender: TObject);
+    procedure TabZoom(Sender: TObject; ADirection: Integer);
+    procedure SetEditorZoom(ASize: Integer);
+    procedure AddRecentMenu(AParent: TMenuItem);
+    procedure FillRecentMenu;
+    procedure RecentClick(Sender: TObject);
+    procedure RecentClearClick(Sender: TObject);
+    procedure NoteRecentFile(const AFileName: string);
+    procedure OpenFileInTab(const AFileName: string);
     procedure DoFindNext(Sender: TObject);
     procedure DoReplace(Sender: TObject);
     procedure FindDialogFind(Sender: TObject);
@@ -323,6 +347,23 @@ type
     procedure PagesAddClick(Sender: TObject);
     procedure AsyncCloseTab(AData: PtrInt);
     procedure AsyncCommentLines(AData: PtrInt);
+    procedure AsyncFormat(AData: PtrInt);
+    procedure DoFormatSql(Sender: TObject);
+    procedure AsyncFormatQuick(AData: PtrInt);
+    procedure DoFormatQuick(Sender: TObject);
+    procedure UpdateFormatCaption;
+    procedure ApplyFormat(T: TpgnQueryTab; const ASrc, ADone: string; ASel: Boolean; ASkipped: Integer;
+      const AProfile: string);
+    procedure MigrateFormatOptions;
+    procedure DoJoinLines(Sender: TObject);
+    procedure DoConvertJoins(Sender: TObject);
+    procedure DoComplete(Sender: TObject);
+    procedure AddTargets(ATab: TpgnQueryTab; ADialect: TpgnDialect; AEngine: TpgnEngine;
+      var ATargets: TpgnCompareTargets);
+    function ConvertForReview(AJob: TpgnConvJob): string;
+    function LookupRoutine(const AName: string; out AInfo: TpgnRoutineInfo): Boolean;
+    function EditorDialect(ATab: TpgnQueryTab): TpgnDialect;
+    function LookupColumns(const ATable: string): TStrings;
     procedure MoveTab(ATab: TpgnQueryTab);
     procedure UpdateSplit;
     procedure SyncTabOrder;
@@ -388,6 +429,7 @@ type
     function AddTreeItem(AParent: TMenuItem; const ACaption: string; ACommand: TpgnTreeCommand): TMenuItem;
     procedure TreeMenuClick(Sender: TObject);
     procedure TreeChange(Sender: TObject; Node: TTreeNode);
+    procedure TreeUTF8KeyPress(Sender: TObject; var UTF8Key: TUTF8Char);
 
     // filter and details
     procedure FilterChange(Sender: TObject);
@@ -503,6 +545,8 @@ const
   // editor commands for Seattle's Ctrl+K Ctrl+C / Ctrl+K Ctrl+U
   ecPgnComment   = ecUserFirst + 1;
   ecPgnUncomment = ecUserFirst + 2;
+  ecPgnFormat    = ecUserFirst + 3;
+  ecPgnFormatQuick = ecUserFirst + 4;
 
 { ---------------------------------------------------------------- setup }
 
@@ -533,7 +577,9 @@ begin
   FLastTabOf := TStringList.Create;
   FTabOrder := TList.Create;
 
+  MigrateFormatOptions;
   BuildActions;
+  UpdateFormatCaption;
   BuildMenu;
   BuildLayout;
   BuildPopupMenus;
@@ -541,6 +587,7 @@ begin
 
   BuildExplorer;
   NewTab('');
+  RestoreSession;
   RecolorFrame;
   Application.QueueAsyncCall(@AsyncColorMenu, 0);
   ApplyCurrentKeymap;
@@ -693,7 +740,19 @@ begin
   FActFind := NewAction(actFind, '&Find...', @DoFind);
   FActFindNext := NewAction(actFindNext, 'Find &Next', @DoFindNext);
   FActReplace := NewAction(actReplace, '&Replace...', @DoReplace);
-  FActSchemaBrowser := NewAction('actSchemaBrowser', 'Schema &Browser', @DoSchemaBrowser);
+  FActGoToLine := NewAction(actGoToLine, '&Go to Line...', @DoGoToLine);
+  FActFormat := NewAction(actFormatSql, '&Format SQL...', @DoFormatSql);
+  FActFormatQuick := NewAction(actFormatQuick, 'Format with "' + DefaultProfileName + '"', @DoFormatQuick);
+  FActJoinLines := NewAction(actJoinLines, '&Join Lines', @DoJoinLines);
+  FActConvertJoins := NewAction(actConvertJoins, 'Oracle/PostgreSQL Compatibility...', @DoConvertJoins);
+  FActComplete := NewAction(actComplete, 'Complete &Code', @DoComplete);
+  FActZoomIn := NewAction(actZoomIn, 'Zoom &In', @DoZoom);
+  FActZoomIn.Tag := 1;
+  FActZoomOut := NewAction(actZoomOut, 'Zoom &Out', @DoZoom);
+  FActZoomOut.Tag := -1;
+  FActZoomReset := NewAction(actZoomReset, '&Reset Zoom', @DoZoom);
+  FActZoomReset.Tag := 0;
+  FActSchemaBrowser := NewAction('actSchemaBrowser', 'Object &Browser', @DoSchemaBrowser);
   FActShowEditor := NewAction('actShowEditor', '&Editor', @DoShowEditor);
   FActPending := NewAction('actPending', '&Transactions...', @DoPending);
   FActUndo := NewAction('actUndo', '&Undo', @DoUndo);
@@ -825,6 +884,7 @@ begin
   M := AddMenu(FMainMenu.Items, '&File');
   AddActionItem(M, FActNewTab);
   AddActionItem(M, FActOpen);
+  AddRecentMenu(M);
   AddActionItem(M, FActSave);
   AddActionItem(M, FActSaveAs);
   AddActionItem(M, FActCloseTab);
@@ -844,9 +904,16 @@ begin
   AddActionItem(M, FActUpper);
   AddActionItem(M, FActLower);
   AddSeparator(M);
+  AddActionItem(M, FActFormat);
+  AddActionItem(M, FActFormatQuick);
+  AddActionItem(M, FActComplete);
+  AddActionItem(M, FActJoinLines);
+  AddActionItem(M, FActConvertJoins);
+  AddSeparator(M);
   AddActionItem(M, FActFind);
   AddActionItem(M, FActFindNext);
   AddActionItem(M, FActReplace);
+  AddActionItem(M, FActGoToLine);
   AddSeparator(M);
   AddActionItem(M, FActOptions);
 
@@ -877,6 +944,10 @@ begin
   AddActionItem(M, FActPrevTab);
   AddActionItem(M, FActMoveTab);
   AddActionItem(M, FActRenameTab);
+  AddSeparator(M);
+  AddActionItem(M, FActZoomIn);
+  AddActionItem(M, FActZoomOut);
+  AddActionItem(M, FActZoomReset);
   AddSeparator(M);
   AddActionItem(M, FActRefreshAll);
   AddSeparator(M);
@@ -983,7 +1054,7 @@ begin
     FToolBar.IconOnly := True;
     FToolBar.Height := Scale96ToScreen(32);
     FToolBar.AddIconDef('neweditor', 'New Editor', FActNewTab, icEditor, isTwoTone);
-    FToolBar.AddIconDef('schemabrowser', 'Schema Browser', FActSchemaBrowser, icSchema, isTwoTone);
+    FToolBar.AddIconDef('schemabrowser', 'Object Browser', FActSchemaBrowser, icSchema, isTwoTone);
     FToolBar.AddIconDef('newconn', 'New Connection', FActNewConn, icNewSession, isTwoTone);
     FToolBar.AddIconDef('endconn', 'End Connection', FActDisconnect, icEndSession, isTwoTone);
     FToolBar.AddIconDef('sessionbrowser', 'Session Browser', FActDbaSessions, icSessionBrowser, isTwoTone);
@@ -1263,6 +1334,7 @@ begin
   FTree.OnDblClick := @TreeDblClick;
   FTree.OnMouseDown := @TreeMouseDown;
   FTree.OnChange := @TreeChange;
+  FTree.OnUTF8KeyPress := @TreeUTF8KeyPress;
 
   if not FAmph then
   begin
@@ -1319,6 +1391,8 @@ begin
   AddActionItem(Root, FActBlockComment);
   AddActionItem(Root, FActUpper);
   AddActionItem(Root, FActLower);
+  AddActionItem(Root, FActFormat);
+  AddActionItem(Root, FActFormatQuick);
   AddSeparator(Root);
   AddActionItem(Root, FActDescribe);
 
@@ -1401,6 +1475,8 @@ begin
     RemoveKey(ShortCut(VK_K, [ssCtrl]));
     AddChord(VK_C, ecPgnComment);
     AddChord(VK_U, ecPgnUncomment);
+    AddChord(VK_F, ecPgnFormat);
+    AddChord(VK_D, ecPgnFormatQuick);
   end;
   AEditor.OnProcessUserCommand := @EditorUserCommand;
   AEditor.OnKeyDown := @EditorKeyDown;
@@ -1421,7 +1497,7 @@ begin
   end;
   if (Key = VK_K) and (Shift = [ssCtrl]) then
   begin
-    FStatus.Texts[2] := 'Ctrl+K: C comments, U uncomments';
+    FStatus.Texts[2] := 'Ctrl+K: C comments, U uncomments, F formats';
     FChordShown := True;
   end
   else if FChordShown then
@@ -1549,6 +1625,14 @@ begin
   FActFind.Enabled := T <> nil;
   FActFindNext.Enabled := T <> nil;
   FActReplace.Enabled := T <> nil;
+  FActGoToLine.Enabled := (T <> nil) and (T.DbaScreen = dsNone);
+  FActFormat.Enabled := (T <> nil) and (T.DbaScreen = dsNone) and not Running;
+  FActFormatQuick.Enabled := FActFormat.Enabled;
+  FActJoinLines.Enabled := FActFormat.Enabled;
+  // any tab: editing SQL doesn't depend on the connection
+  FActConvertJoins.Enabled := FActFormat.Enabled;
+  // the lists come from what's already looked up while a query runs
+  FActComplete.Enabled := (T <> nil) and (T.DbaScreen = dsNone);
   FActIndent.Enabled := T <> nil;
   FActOutdent.Enabled := T <> nil;
   FActUndo.Enabled := (T <> nil) and T.Editor.CanUndo;
@@ -1630,7 +1714,7 @@ begin
     // Toad's title: USER@DB - Pagona - [Editor (Query 1)]
     if FBrowserShown and (FBrowser.ConnIndex >= 0) then
     begin
-      Caption := FBrowser.Info.User + '@' + FBrowser.Info.Name + ' - Pagona - [Schema Browser]';
+      Caption := FBrowser.Info.User + '@' + FBrowser.Info.Name + ' - Pagona - [Object Browser]';
     end
     else if (T <> nil) and T.IsConnected then
     begin
@@ -1934,6 +2018,7 @@ begin
   Result.Parent := Page;
   Result.Align := alClient;
   Result.OnStateChanged := @TabStateChanged;
+  Result.OnZoom := @TabZoom;
   Result.OnActivate := @TabActivated;
   Result.OnSchemaChanged := @TabSchemaChanged;
   Result.OnCaretMoved := @TabCaretMoved;
@@ -2031,7 +2116,10 @@ begin
   begin
     Exit;
   end;
-  if ATab.IsModified then
+  // closing Pagona with Reopen tabs on: a tab never saved keeps its text
+  // for next time instead of asking
+  if ATab.IsModified and not (FClosingApp and FSettings.ReopenTabs and (ATab.FileName = '') and
+    (ATab.DbaScreen = dsNone) and not ATab.IsRoutine) then
   begin
     Answer := MessageDlg('Save changes to "' + ATab.Title + '"?' + LineEnding + LineEnding +
       'Yes = Save, No = Don''t save', mtConfirmation, [mbYes, mbNo, mbCancel], 0);
@@ -2091,6 +2179,7 @@ begin
   try
     ATab.SaveToFile(SaveName);
     FLastDir := ExtractFileDir(SaveName);
+    NoteRecentFile(SaveName);
     Result := True;
   except
     on E: Exception do
@@ -4477,6 +4566,73 @@ begin
   end;
 end;
 
+{ Typing in the Object Explorer jumps to the next shown name that starts
+  with what's typed (letters typed within a second add up; the same letter
+  again moves on to the next match). }
+procedure TpgnMainForm.TreeUTF8KeyPress(Sender: TObject; var UTF8Key: TUTF8Char);
+var
+  Find: string;
+  Start, N: TTreeNode;
+  Again: Boolean;
+begin
+  if (UTF8Key = '') or (UTF8Key[1] < ' ') or (UTF8Key = #127) then
+  begin
+    Exit;
+  end;
+  if GetTickCount64 - FTypeAheadAt > 1000 then
+  begin
+    FTypeAhead := '';
+  end;
+  FTypeAheadAt := GetTickCount64;
+  Again := (Length(FTypeAhead) = 1) and SameText(UTF8Key, FTypeAhead);
+  if not Again then
+  begin
+    FTypeAhead := FTypeAhead + UTF8Key;
+  end;
+  Find := LowerCase(FTypeAhead);
+  UTF8Key := '';
+  Start := FTree.Selected;
+  if Start = nil then
+  begin
+    Start := FTree.Items.GetFirstNode;
+  end;
+  if Start = nil then
+  begin
+    Exit;
+  end;
+  // a new letter may still match the node in view; the same letter moves on
+  if Again then
+  begin
+    N := Start.GetNextVisible;
+  end
+  else
+  begin
+    N := Start;
+  end;
+  while N <> nil do
+  begin
+    if Copy(LowerCase(N.Text), 1, Length(Find)) = Find then
+    begin
+      FTree.Selected := N;
+      N.MakeVisible;
+      Exit;
+    end;
+    N := N.GetNextVisible;
+  end;
+  // round again from the top
+  N := FTree.Items.GetFirstNode;
+  while (N <> nil) and (N <> Start) do
+  begin
+    if Copy(LowerCase(N.Text), 1, Length(Find)) = Find then
+    begin
+      FTree.Selected := N;
+      N.MakeVisible;
+      Exit;
+    end;
+    N := N.GetNextVisible;
+  end;
+end;
+
 procedure TpgnMainForm.TreeChange(Sender: TObject; Node: TTreeNode);
 begin
   // wait for the selection to settle (arrowing down a long list)
@@ -4712,6 +4868,8 @@ begin
   end;
   if not (IsTable or IsView or IsMat or IsRoutine or IsTrigger or IsOther) then
   begin
+    // nothing to show for this kind: clear, rather than keep the last object
+    ClearDetails('Details ' + #$C2#$B7 + ' ' + AName);
     Exit;
   end;
   if AKind = 'Procedure' then
@@ -5321,7 +5479,6 @@ end;
 procedure TpgnMainForm.DoOpenFile(Sender: TObject);
 var
   D: TOpenDialog;
-  T: TpgnQueryTab;
 begin
   D := TOpenDialog.Create(Self);
   try
@@ -5332,33 +5489,242 @@ begin
     begin
       Exit;
     end;
-    if (FActiveTab <> nil) and FActiveTab.IsEmpty and not FActiveTab.IsRunning then
+    OpenFileInTab(D.FileName);
+  finally
+    D.Free;
+  end;
+end;
+
+{ A file already open in a tab just brings that tab forward. }
+procedure TpgnMainForm.OpenFileInTab(const AFileName: string);
+var
+  T: TpgnQueryTab;
+  I: Integer;
+begin
+  for I := 0 to TabCount - 1 do
+  begin
+    if (TabAt(I).FileName <> '') and SameFileName(TabAt(I).FileName, AFileName) then
     begin
-      T := FActiveTab;
-    end
-    else if (FActiveTab <> nil) and FActiveTab.IsConnected then
+      ActivateTab(TabAt(I));
+      TabAt(I).FocusEditor;
+      Exit;
+    end;
+  end;
+  if not FileExists(AFileName) then
+  begin
+    MessageDlg('Open SQL', AFileName + LineEnding + LineEnding +
+      'This file isn''t there any more (moved, renamed or deleted). It''s taken off the recent list.',
+      mtInformation, [mbOK], 0);
+    I := FSettings.RecentFiles.IndexOf(AFileName);
+    if I >= 0 then
     begin
-      T := NewTabOn(FActiveTab.Info, FActiveTab.CurrentDb, '');
-      if T = nil then
-      begin
-        T := NewTab('');
-      end;
-    end
-    else
+      FSettings.RecentFiles.Delete(I);
+      FSettings.Save;
+      FillRecentMenu;
+    end;
+    Exit;
+  end;
+  if (FActiveTab <> nil) and FActiveTab.IsEmpty and not FActiveTab.IsRunning then
+  begin
+    T := FActiveTab;
+  end
+  else if (FActiveTab <> nil) and FActiveTab.IsConnected then
+  begin
+    T := NewTabOn(FActiveTab.Info, FActiveTab.CurrentDb, '');
+    if T = nil then
     begin
       T := NewTab('');
     end;
-    try
-      T.LoadFromFile(D.FileName);
-      FLastDir := ExtractFileDir(D.FileName);
-    except
-      on E: Exception do
-      begin
-        ShowError('Could not open ' + D.FileName, E);
-      end;
+  end
+  else
+  begin
+    T := NewTab('');
+  end;
+  try
+    T.LoadFromFile(AFileName);
+    FLastDir := ExtractFileDir(AFileName);
+    NoteRecentFile(AFileName);
+  except
+    on E: Exception do
+    begin
+      ShowError('Could not open ' + AFileName, E);
     end;
-  finally
-    D.Free;
+  end;
+end;
+
+{ ------------------------------------------------------ recent files }
+
+procedure TpgnMainForm.AddRecentMenu(AParent: TMenuItem);
+begin
+  FRecentMenu := AddMenu(AParent, 'Recent &Files');
+  FillRecentMenu;
+end;
+
+procedure TpgnMainForm.FillRecentMenu;
+var
+  I: Integer;
+  Item: TMenuItem;
+  Shown: string;
+begin
+  if FRecentMenu = nil then
+  begin
+    Exit;
+  end;
+  FRecentMenu.Clear;
+  for I := 0 to FSettings.RecentFiles.Count - 1 do
+  begin
+    Shown := FSettings.RecentFiles[I];
+    // a long path keeps its start and its file name
+    if Length(Shown) > 70 then
+    begin
+      Shown := Copy(Shown, 1, 25) + '...' + Copy(Shown, Length(Shown) - 41, 42);
+    end;
+    Item := TMenuItem.Create(Self);
+    if I < 9 then
+    begin
+      Item.Caption := '&' + IntToStr(I + 1) + '  ' + StringReplace(Shown, '&', '&&', [rfReplaceAll]);
+    end
+    else
+    begin
+      Item.Caption := '1&0  ' + StringReplace(Shown, '&', '&&', [rfReplaceAll]);
+    end;
+    Item.Tag := I;
+    Item.Hint := FSettings.RecentFiles[I];
+    Item.OnClick := @RecentClick;
+    FRecentMenu.Add(Item);
+  end;
+  if FSettings.RecentFiles.Count = 0 then
+  begin
+    Item := TMenuItem.Create(Self);
+    Item.Caption := '(none yet)';
+    Item.Enabled := False;
+    FRecentMenu.Add(Item);
+  end
+  else
+  begin
+    AddSeparator(FRecentMenu);
+    Item := TMenuItem.Create(Self);
+    Item.Caption := '&Clear Recent Files';
+    Item.OnClick := @RecentClearClick;
+    FRecentMenu.Add(Item);
+  end;
+end;
+
+procedure TpgnMainForm.RecentClick(Sender: TObject);
+var
+  I: Integer;
+begin
+  I := (Sender as TMenuItem).Tag;
+  if (I >= 0) and (I < FSettings.RecentFiles.Count) then
+  begin
+    // after the menu has closed
+    OpenFileInTab(FSettings.RecentFiles[I]);
+  end;
+end;
+
+procedure TpgnMainForm.RecentClearClick(Sender: TObject);
+begin
+  FSettings.RecentFiles.Clear;
+  FSettings.Save;
+  FillRecentMenu;
+end;
+
+procedure TpgnMainForm.NoteRecentFile(const AFileName: string);
+begin
+  AddRecentFile(FSettings.RecentFiles, AFileName);
+  try
+    FSettings.Save;
+  except
+    on E: Exception do
+    begin
+      // the list is a convenience; a settings file that can't be written
+      // shouldn't stop the open or save
+    end;
+  end;
+  FillRecentMenu;
+end;
+
+{ --------------------------------------------------- go to line, zoom }
+
+procedure TpgnMainForm.DoGoToLine(Sender: TObject);
+var
+  S: string;
+  N: Integer;
+begin
+  if FActiveTab = nil then
+  begin
+    Exit;
+  end;
+  S := IntToStr(FActiveTab.Editor.CaretY);
+  if not InputQuery('Go to Line', 'Line number (1 to ' + IntToStr(Max(1, FActiveTab.Editor.Lines.Count)) +
+    '):', S) then
+  begin
+    Exit;
+  end;
+  if not TryStrToInt(Trim(S), N) then
+  begin
+    Exit;
+  end;
+  FActiveTab.GoToLine(N);
+end;
+
+procedure TpgnMainForm.DoZoom(Sender: TObject);
+begin
+  case (Sender as TAction).Tag of
+    1:
+      begin
+        SetEditorZoom(FSettings.EditorFontSize + 1);
+      end;
+    -1:
+      begin
+        SetEditorZoom(FSettings.EditorFontSize - 1);
+      end;
+  else
+    begin
+      SetEditorZoom(DefaultEditorFontSize);
+    end;
+  end;
+end;
+
+procedure TpgnMainForm.TabZoom(Sender: TObject; ADirection: Integer);
+begin
+  SetEditorZoom(FSettings.EditorFontSize + ADirection);
+end;
+
+{ Every editor at once, and remembered for next time. }
+procedure TpgnMainForm.SetEditorZoom(ASize: Integer);
+var
+  I: Integer;
+begin
+  ASize := EnsureRange(ASize, MinEditorFontSize, MaxEditorFontSize);
+  if ASize = FSettings.EditorFontSize then
+  begin
+    Exit;
+  end;
+  FSettings.EditorFontSize := ASize;
+  for I := 0 to TabCount - 1 do
+  begin
+    TabAt(I).SetEditorFontSize(ASize);
+  end;
+  if FDetailsDefinition <> nil then
+  begin
+    FDetailsDefinition.Font.Size := ASize;
+  end;
+  try
+    FSettings.Save;
+  except
+    on E: Exception do
+    begin
+      // the size still applies for this session
+    end;
+  end;
+  if ASize = DefaultEditorFontSize then
+  begin
+    FStatus.Texts[2] := 'Editor text ' + IntToStr(ASize) + ' pt (the usual size)';
+  end
+  else
+  begin
+    FStatus.Texts[2] := 'Editor text ' + IntToStr(ASize) + ' pt (Ctrl+0 for the usual size)';
   end;
 end;
 
@@ -5416,6 +5782,7 @@ var
   A: TpgnAdapter;
   Ref: TpgnObjectRef;
   Found: Boolean;
+  Routine: TpgnRoutineInfo;
 begin
   T := FActiveTab;
   if (T = nil) or not T.IsConnected then
@@ -5446,6 +5813,34 @@ begin
     try
       A := AdapterFor(Idx, T.CurrentDb);
       Found := A.ResolveObject(Ident, Default, Ref, Via);
+      // pkg.function: the package's member, not the whole package
+      if (not Found) and (Pos('.', Ident) > 0) then
+      begin
+        Routine := A.DescribeRoutine(Ident, Default);
+        if Routine.Found and (Routine.PackageName <> '') then
+        begin
+          Found := True;
+          Ref.Database := A.CurrentDatabase;
+          Ref.Schema := Routine.Owner;
+          Ref.Name := Routine.PackageName + '.' + Routine.Name;
+          if Routine.Kind = 'FUNCTION' then
+          begin
+            Ref.Kind := 'Function';
+          end
+          else
+          begin
+            Ref.Kind := 'Procedure';
+          end;
+          Via := 'in package ' + Routine.Owner + '.' + Routine.PackageName;
+        end;
+      end;
+      // notes.body with the cursor on notes: a column of a table, so the
+      // table (each step back drops the last part)
+      while (not Found) and (LastDelimiter('.', Ident) > 1) do
+      begin
+        Ident := Copy(Ident, 1, LastDelimiter('.', Ident) - 1);
+        Found := A.ResolveObject(Ident, Default, Ref, Via);
+      end;
     except
       on E: Exception do
       begin
@@ -5544,7 +5939,7 @@ begin
   Result := AdapterFor(Idx, ADatabase);
 end;
 
-{ Show in Schema Browser / Object Explorer / Explorer. }
+{ Show in Object Browser / Object Explorer / Explorer. }
 procedure TpgnMainForm.DescribeReveal(const AConnId: string; const ARef: TpgnObjectRef);
 var
   Idx: Integer;
@@ -5671,6 +6066,7 @@ begin
   if EditOptions(Self, FSettings) then
   begin
     ApplyCurrentKeymap;
+    UpdateFormatCaption;
   end;
 end;
 
@@ -5850,6 +6246,16 @@ begin
   begin
     Command := ecNone;
     Application.QueueAsyncCall(@AsyncCommentLines, Ord(cmUncomment));
+  end
+  else if Command = ecPgnFormat then
+  begin
+    Command := ecNone;
+    Application.QueueAsyncCall(@AsyncFormat, 0);
+  end
+  else if Command = ecPgnFormatQuick then
+  begin
+    Command := ecNone;
+    Application.QueueAsyncCall(@AsyncFormatQuick, 0);
   end;
 end;
 
@@ -5858,6 +6264,551 @@ begin
   if FActiveTab <> nil then
   begin
     FActiveTab.CommentLines(TpgnCommentMode(AData));
+  end;
+end;
+
+{ ------------------------------------------- Format SQL, Join Lines }
+
+{ The tab's engine; a tab not connected anywhere guesses from the text
+  (Oracle's (+), :=, a / line; T-SQL's GO; MySQL's DELIMITER or backticks;
+  PostgreSQL's $$ or ::), else the layout's usual engine. }
+function TpgnMainForm.EditorDialect(ATab: TpgnQueryTab): TpgnDialect;
+var
+  S, L: string;
+  Lines: TStringList;
+  I: Integer;
+begin
+  if ATab.IsConnected then
+  begin
+    Result := ATab.Dialect;
+    Exit;
+  end;
+  S := ATab.Editor.Text;
+  L := LowerCase(S);
+  Lines := TStringList.Create;
+  try
+    Lines.Text := S;
+    for I := 0 to Lines.Count - 1 do
+    begin
+      if SameText(Trim(Lines[I]), 'GO') then
+      begin
+        Result := sdTSQL;
+        Exit;
+      end;
+      if Trim(Lines[I]) = '/' then
+      begin
+        Result := sdOracle;
+        Exit;
+      end;
+      if Copy(UpperCase(TrimLeft(Lines[I])), 1, 10) = 'DELIMITER ' then
+      begin
+        Result := sdMySQL;
+        Exit;
+      end;
+    end;
+  finally
+    Lines.Free;
+  end;
+  if (Pos('(+)', S) > 0) or (Pos(':=', S) > 0) or (Pos('nvl(', L) > 0) or (Pos(' dual', L) > 0) or
+    (Pos('decode(', L) > 0) or (Pos('sysdate', L) > 0) then
+  begin
+    Result := sdOracle;
+  end
+  else if Pos('`', S) > 0 then
+  begin
+    Result := sdMySQL;
+  end
+  else if (Pos('$$', S) > 0) or (Pos('::', S) > 0) then
+  begin
+    Result := sdPostgreSQL;
+  end
+  else if FSea then
+  begin
+    Result := sdTSQL;
+  end
+  else if FAmph then
+  begin
+    Result := sdOracle;
+  end
+  else
+  begin
+    Result := sdMySQL;
+  end;
+end;
+
+procedure TpgnMainForm.AsyncFormat(AData: PtrInt);
+begin
+  DoFormatSql(nil);
+end;
+
+{ The selection, or the whole editor, replaced as one Undo step. }
+procedure ReplaceEditorText(E: TSynEdit; const ANew: string; AHadSelection: Boolean);
+var
+  Line, Top: Integer;
+begin
+  Line := E.CaretY;
+  Top := E.TopLine;
+  E.BeginUndoBlock;
+  try
+    if not AHadSelection then
+    begin
+      E.SelectAll;
+    end;
+    E.SelText := ANew;
+  finally
+    E.EndUndoBlock;
+  end;
+  if not AHadSelection then
+  begin
+    E.CaretXY := Point(1, Min(Line, Max(1, E.Lines.Count)));
+    E.TopLine := Min(Top, Max(1, E.Lines.Count));
+  end;
+end;
+
+{ The profile to use and the version of it to save when the old single
+  format setting (before profiles) was changed from the default: it becomes
+  your own profile "My Format", once. }
+procedure TpgnMainForm.MigrateFormatOptions;
+var
+  FileName: string;
+  A, B: TJSONObject;
+  Same: Boolean;
+begin
+  if not FSettings.HadFormatOpt then
+  begin
+    Exit;
+  end;
+  FSettings.HadFormatOpt := False;
+  A := OptionsToJson(FSettings.FormatOpt);
+  B := OptionsToJson(DefaultFormatOptions);
+  try
+    Same := A.AsJSON = B.AsJSON;
+  finally
+    A.Free;
+    B.Free;
+  end;
+  if not SameText(FSettings.FormatProfile, DefaultProfileKey) or Same then
+  begin
+    FSettings.Save;
+    Exit;
+  end;
+  FileName := ProfileFileName(LocalFormatsDir, 'My Format');
+  try
+    if not FileExists(FileName) then
+    begin
+      WriteProfileFile(FileName, 'My Format', FSettings.FormatOpt);
+    end;
+    FSettings.FormatProfile := 'local:My Format';
+  except
+    // keep Pagona Default
+  end;
+  FSettings.Save;
+end;
+
+procedure TpgnMainForm.UpdateFormatCaption;
+begin
+  if FActFormatQuick <> nil then
+  begin
+    FActFormatQuick.Caption := 'Format with "' + StringReplace(CurrentFormatProfile(FSettings).Name, '&', '&&',
+      [rfReplaceAll]) + '"';
+  end;
+end;
+
+function SourceOf(T: TpgnQueryTab; out ASel: Boolean): string;
+begin
+  ASel := T.Editor.SelAvail;
+  if ASel then
+  begin
+    Result := T.Editor.SelText;
+  end
+  else
+  begin
+    Result := T.Editor.Text;
+  end;
+end;
+
+procedure TpgnMainForm.ApplyFormat(T: TpgnQueryTab; const ASrc, ADone: string; ASel: Boolean;
+  ASkipped: Integer; const AProfile: string);
+begin
+  if ADone <> ASrc then
+  begin
+    ReplaceEditorText(T.Editor, ADone, ASel);
+  end;
+  if ASkipped > 0 then
+  begin
+    FStatus.Texts[2] := IntToStr(ASkipped) + ' statement(s) left as written: formatting would have ' +
+      'changed more than the layout';
+    T.Log('Format SQL (' + AProfile + '): ' + IntToStr(ASkipped) + ' statement(s) left as written, ' +
+      'because formatting them would have changed more than spaces, line breaks and keyword case.');
+  end
+  else if ADone = ASrc then
+  begin
+    FStatus.Texts[2] := 'Already formatted (' + AProfile + ')';
+  end
+  else
+  begin
+    FStatus.Texts[2] := 'Formatted with ' + AProfile + ' (Undo puts it back)';
+  end;
+  T.FocusEditor;
+end;
+
+{ Format SQL...: the window, on the profile used last. }
+procedure TpgnMainForm.DoFormatSql(Sender: TObject);
+var
+  T: TpgnQueryTab;
+  Src, Done: string;
+  Sel: Boolean;
+  Skipped: Integer;
+begin
+  T := FActiveTab;
+  if (T = nil) or (T.DbaScreen <> dsNone) or T.IsRunning then
+  begin
+    Exit;
+  end;
+  Src := SourceOf(T, Sel);
+  if Trim(Src) = '' then
+  begin
+    FStatus.Texts[2] := 'Nothing to format';
+    Exit;
+  end;
+  if ShowFormatWindow(Self, FSettings, Src, EditorDialect(T), Done, Skipped) then
+  begin
+    FSettings.Save;
+    UpdateFormatCaption;
+    ApplyFormat(T, Src, Done, Sel, Skipped, CurrentFormatProfile(FSettings).Name);
+  end
+  else
+  begin
+    // a profile saved, renamed or deleted in the window still counts
+    FSettings.Save;
+    UpdateFormatCaption;
+    T.FocusEditor;
+  end;
+end;
+
+procedure TpgnMainForm.AsyncFormatQuick(AData: PtrInt);
+begin
+  DoFormatQuick(nil);
+end;
+
+{ Format with "...": the last profile, no window. Undo puts it back. }
+procedure TpgnMainForm.DoFormatQuick(Sender: TObject);
+var
+  T: TpgnQueryTab;
+  Src, Done: string;
+  Sel: Boolean;
+  Skipped: Integer;
+  P: TpgnFormatProfile;
+begin
+  T := FActiveTab;
+  if (T = nil) or (T.DbaScreen <> dsNone) or T.IsRunning then
+  begin
+    Exit;
+  end;
+  Src := SourceOf(T, Sel);
+  if Trim(Src) = '' then
+  begin
+    FStatus.Texts[2] := 'Nothing to format';
+    Exit;
+  end;
+  P := CurrentFormatProfile(FSettings);
+  Done := FormatSql(Src, EditorDialect(T), P.Opt, Skipped);
+  ApplyFormat(T, Src, Done, Sel, Skipped, P.Name);
+end;
+
+procedure TpgnMainForm.DoJoinLines(Sender: TObject);
+var
+  T: TpgnQueryTab;
+  Src, Done: string;
+  Sel: Boolean;
+  Skipped: Integer;
+begin
+  T := FActiveTab;
+  if (T = nil) or (T.DbaScreen <> dsNone) or T.IsRunning then
+  begin
+    Exit;
+  end;
+  Sel := T.Editor.SelAvail;
+  if Sel then
+  begin
+    Src := T.Editor.SelText;
+  end
+  else
+  begin
+    Src := T.Editor.Text;
+  end;
+  if Trim(Src) = '' then
+  begin
+    Exit;
+  end;
+  Done := JoinSqlLines(Src, EditorDialect(T), Skipped);
+  if Done <> Src then
+  begin
+    ReplaceEditorText(T.Editor, Done, Sel);
+  end;
+  if Skipped > 0 then
+  begin
+    FStatus.Texts[2] := IntToStr(Skipped) + ' statement(s) left as written';
+  end
+  else
+  begin
+    FStatus.Texts[2] := 'Each statement on one line, comments removed (Undo puts it back)';
+  end;
+  T.FocusEditor;
+end;
+
+{ Convert (+): a table's columns, from the tab's own session (the lookup
+  ties an unqualified column to its table). }
+function TpgnMainForm.LookupColumns(const ATable: string): TStrings;
+var
+  Ref: TpgnObjectRef;
+  Via, C: string;
+  R: TpgnResultSet;
+  I: Integer;
+begin
+  Result := nil;
+  if FLookupAdapter = nil then
+  begin
+    Exit;
+  end;
+  if not FLookupAdapter.ResolveObject(ATable, FLookupAdapter.CurrentSchema, Ref, Via) then
+  begin
+    Exit;
+  end;
+  C := Ref.Schema;
+  if C = '' then
+  begin
+    C := Ref.Database;
+  end;
+  R := FLookupAdapter.DescribeTable(C, Ref.Name);
+  if R = nil then
+  begin
+    Exit;
+  end;
+  try
+    Result := TStringList.Create;
+    for I := 0 to R.RowCount - 1 do
+    begin
+      if Length(R.Rows[I].Values) > 0 then
+      begin
+        Result.Add(UpperCase(R.Rows[I].Values[0]));
+      end;
+    end;
+  finally
+    R.Free;
+  end;
+end;
+
+{ For the review window: the text being converted, converted as AJob says
+  and formatted with the current profile. }
+function TpgnMainForm.ConvertForReview(AJob: TpgnConvJob): string;
+var
+  Done: string;
+  Skipped: Integer;
+begin
+  AJob.Columns := @LookupColumns;
+  AJob.Routines := @LookupRoutine;
+  Done := ConvertOracleToAnsi(FConvSource, AJob);
+  if Done = FConvSource then
+  begin
+    Result := Done;   // nothing changed: shown as it was
+    Exit;
+  end;
+  Result := FormatSql(Done, sdOracle, FConvOpt, Skipped);
+end;
+
+{ A stored function, from the lookup session's data dictionary; each name
+  once per review (the window converts again on every tick). False when
+  there's no Oracle session to ask. }
+function TpgnMainForm.LookupRoutine(const AName: string; out AInfo: TpgnRoutineInfo): Boolean;
+var
+  K: Integer;
+begin
+  AInfo := Default(TpgnRoutineInfo);
+  Result := FLookupAdapter <> nil;
+  if not Result then
+  begin
+    Exit;
+  end;
+  K := FRoutineNames.IndexOf(UpperCase(AName));
+  if K >= 0 then
+  begin
+    AInfo := FRoutineInfos[K];
+    Exit;
+  end;
+  try
+    AInfo := FLookupAdapter.DescribeRoutine(AName, FLookupAdapter.CurrentSchema);
+  except
+    on E: Exception do
+    begin
+      AInfo.Found := False;
+      AInfo.Note := 'Could not look it up: ' + E.Message;
+    end;
+  end;
+  FRoutineNames.Add(UpperCase(AName));
+  SetLength(FRoutineInfos, Length(FRoutineInfos) + 1);
+  FRoutineInfos[High(FRoutineInfos)] := AInfo;
+end;
+
+{ Oracle/PostgreSQL Compatibility: SQL that runs on Oracle 19c and
+  PostgreSQL. Any tab, connected anywhere or not: editing SQL doesn't need
+  a connection. Run Both and Compare runs on an open Oracle session: the
+  tab's own (it sees the tab's pending work), or one in the Explorer. }
+{ The sessions on ADialect / AEngine, for the Compatibility window's
+  connection lists: this tab's, then the other query tabs', then the
+  connections open in the Explorer. }
+procedure TpgnMainForm.AddTargets(ATab: TpgnQueryTab; ADialect: TpgnDialect; AEngine: TpgnEngine;
+  var ATargets: TpgnCompareTargets);
+var
+  I, N: Integer;
+  O: TpgnQueryTab;
+begin
+  N := Length(ATargets);
+  if ATab.IsConnected and (ATab.Dialect = ADialect) then
+  begin
+    SetLength(ATargets, N + 1);
+    ATargets[N].Caption := ConnectionLongLabel(ATab.Info) + ' (this tab''s session)';
+    ATargets[N].Env := ATab.Info.Environment;
+    ATargets[N].Adapter := ATab.Adapter;
+    ATargets[N].IsBusy := @ATab.IsRunning;
+    Inc(N);
+  end;
+  for I := 0 to TabCount - 1 do
+  begin
+    O := TabAt(I);
+    if (O <> ATab) and O.IsConnected and (O.Dialect = ADialect) and (O.DbaScreen = dsNone) then
+    begin
+      SetLength(ATargets, N + 1);
+      ATargets[N].Caption := ConnectionLongLabel(O.Info) + ' (tab ' + O.Title + ')';
+      ATargets[N].Env := O.Info.Environment;
+      ATargets[N].Adapter := O.Adapter;
+      ATargets[N].IsBusy := @O.IsRunning;
+      Inc(N);
+    end;
+  end;
+  for I := 0 to High(FExplorer) do
+  begin
+    if (FExplorer[I].Info.Engine = AEngine) and (FExplorer[I].Adapter <> nil) and
+      FExplorer[I].Adapter.IsConnected and not (ATab.IsConnected and (ATab.Info.Id = FExplorer[I].Info.Id)) then
+    begin
+      SetLength(ATargets, N + 1);
+      ATargets[N].Caption := ConnectionLongLabel(FExplorer[I].Info) + ' (Explorer)';
+      ATargets[N].Env := FExplorer[I].Info.Environment;
+      ATargets[N].Adapter := FExplorer[I].Adapter;
+      ATargets[N].IsBusy := nil;
+      Inc(N);
+    end;
+  end;
+end;
+
+procedure TpgnMainForm.DoConvertJoins(Sender: TObject);
+var
+  T: TpgnQueryTab;
+  Src, Saved, Where, Summary: string;
+  Sel, Any: Boolean;
+  Setup: TpgnReviewSetup;
+  Probe: TpgnConvJob;
+  R: TpgnConvRule;
+begin
+  T := FActiveTab;
+  if (T = nil) or (T.DbaScreen <> dsNone) or T.IsRunning then
+  begin
+    Exit;
+  end;
+  Sel := T.Editor.SelAvail;
+  if Sel then
+  begin
+    Src := T.Editor.SelText;
+    Where := 'the selection';
+  end
+  else
+  begin
+    Src := T.Editor.Text;
+    Where := 'the editor';
+  end;
+  if Trim(Src) = '' then
+  begin
+    FStatus.Texts[2] := 'Nothing to convert';
+    Exit;
+  end;
+  Setup := Default(TpgnReviewSetup);
+  Setup.Before := Src;
+  Setup.Source := Where;
+  Setup.Convert := @ConvertForReview;
+  Setup.RowLimit := FSettings.RowLimit;
+  Setup.FontSize := FSettings.EditorFontSize;
+  Setup.Theme := FSettings.Theme;
+  Setup.OrigFile := T.FileName;
+  // Oracle (from): this tab's session if it's on Oracle, then open Oracle
+  // connections in the Explorer; PostgreSQL (to) the same way
+  AddTargets(T, sdOracle, feOracle, Setup.FromTargets);
+  AddTargets(T, sdPostgreSQL, fePostgreSQL, Setup.ToTargets);
+  Setup.DefaultFrom := 0;
+  Setup.DefaultTo := 0;
+  if Length(Setup.FromTargets) = 0 then
+  begin
+    FLookupAdapter := nil;
+  end
+  else
+  begin
+    // functions are looked up on the first Oracle one: this tab's, if it's on Oracle
+    FLookupAdapter := Setup.FromTargets[0].Adapter;
+    Setup.LookupFrom := Setup.FromTargets[0].Caption;
+  end;
+  FConvSource := Src;
+  FConvOpt := CurrentFormatProfile(FSettings).Opt;
+  FRoutineNames := TStringList.Create;
+  FRoutineNames.Sorted := False;
+  FRoutineInfos := nil;
+  try
+    // anything to do at all?
+    Probe := TpgnConvJob.Create;
+    try
+      Probe.Rules := [Low(TpgnConvRule)..High(TpgnConvRule)];
+      Screen.Cursor := crHourGlass;
+      try
+        ConvertForReview(Probe);
+      finally
+        Screen.Cursor := crDefault;
+      end;
+      Any := Length(Probe.Funcs) > 0;
+      for R := Low(TpgnConvRule) to High(TpgnConvRule) do
+      begin
+        if Probe.Counts[R] > 0 then
+        begin
+          Any := True;
+        end;
+      end;
+    finally
+      Probe.Free;
+    end;
+    if not Any then
+    begin
+      MessageDlg('Oracle/PostgreSQL Compatibility', 'Nothing Oracle-only found in ' + Where +
+        ': it should run on PostgreSQL as it is.', mtInformation, [mbOK], 0);
+      Exit;
+    end;
+    ReviewConversion(Self, Setup, Saved, Summary);
+    if Saved <> '' then
+    begin
+      FStatus.Texts[2] := 'Oracle/PostgreSQL Compatibility: saved to ' + Saved;
+      T.Log('Oracle/PostgreSQL Compatibility: ' + Summary + '. Saved to ' + Saved + '.');
+    end;
+  finally
+    FLookupAdapter := nil;
+    FConvSource := '';
+    FreeAndNil(FRoutineNames);
+    FRoutineInfos := nil;
+  end;
+  T.FocusEditor;
+end;
+
+procedure TpgnMainForm.DoComplete(Sender: TObject);
+begin
+  if (FActiveTab <> nil) and (FActiveTab.DbaScreen = dsNone) then
+  begin
+    FActiveTab.FocusEditor;
+    FActiveTab.ShowCompletion(False);
   end;
 end;
 
@@ -5955,14 +6906,170 @@ begin
       Exit;
     end;
   end;
-  for I := 0 to TabCount - 1 do
-  begin
-    if not ConfirmCloseTab(TabAt(I), 'closing Pagona') then
+  FClosingApp := True;
+  try
+    for I := 0 to TabCount - 1 do
     begin
-      Exit;
+      if not ConfirmCloseTab(TabAt(I), 'closing Pagona') then
+      begin
+        Exit;
+      end;
+    end;
+  finally
+    FClosingApp := False;
+  end;
+  try
+    if FSettings.ReopenTabs then
+    begin
+      SaveSessionNow;
+    end
+    else
+    begin
+      ForgetSession;
+    end;
+  except
+    on E: Exception do
+    begin
+      // never stop Pagona closing over the session file
     end;
   end;
   CanClose := True;
+end;
+
+{ The tabs to open next time: query tabs with a file or with text (not
+  DBA screens or routine editors, which open from the database). }
+procedure TpgnMainForm.SaveSessionNow;
+var
+  Tabs: TpgnSessionTabs;
+  T: TpgnQueryTab;
+  I, N, ActiveAt: Integer;
+begin
+  Tabs := nil;
+  ActiveAt := 0;
+  for I := 0 to TabCount - 1 do
+  begin
+    T := TabAt(I);
+    if (T.DbaScreen <> dsNone) or T.IsRoutine or T.IsEmpty then
+    begin
+      Continue;
+    end;
+    N := Length(Tabs);
+    SetLength(Tabs, N + 1);
+    Tabs[N].Title := T.Title;
+    Tabs[N].FileName := T.FileName;
+    if T.FileName = '' then
+    begin
+      Tabs[N].Text := T.Editor.Text;
+    end;
+    if T.IsConnected then
+    begin
+      Tabs[N].ConnName := T.Info.Name;
+      Tabs[N].ConnId := T.Info.Id;
+      Tabs[N].Database := T.CurrentDb;
+    end;
+    Tabs[N].Line := T.Editor.CaretY;
+    if T = FActiveTab then
+    begin
+      ActiveAt := N;
+    end;
+  end;
+  if Length(Tabs) = 0 then
+  begin
+    ForgetSession;
+  end
+  else
+  begin
+    SaveSession(Tabs, ActiveAt);
+  end;
+end;
+
+{ Last session's tabs, not connected; each one says where it was. The
+  empty first tab is used for the first of them. }
+procedure TpgnMainForm.RestoreSession;
+var
+  Tabs: TpgnSessionTabs;
+  ActiveAt, I, Opened: Integer;
+  T, First, ActiveTab: TpgnQueryTab;
+  Missing: TStringList;
+begin
+  if not FSettings.ReopenTabs then
+  begin
+    Exit;
+  end;
+  if not LoadSession(Tabs, ActiveAt) then
+  begin
+    Exit;
+  end;
+  Missing := TStringList.Create;
+  try
+    First := FActiveTab;
+    ActiveTab := nil;
+    Opened := 0;
+    for I := 0 to High(Tabs) do
+    begin
+      if (Tabs[I].FileName <> '') and not FileExists(Tabs[I].FileName) then
+      begin
+        Missing.Add(Tabs[I].FileName);
+        Continue;
+      end;
+      if (Opened = 0) and (First <> nil) and First.IsEmpty then
+      begin
+        T := First;
+      end
+      else
+      begin
+        T := NewTab(Tabs[I].Title);
+      end;
+      Inc(Opened);
+      try
+        if Tabs[I].FileName <> '' then
+        begin
+          T.LoadFromFile(Tabs[I].FileName);
+        end
+        else
+        begin
+          T.Title := Tabs[I].Title;
+          T.RestoreText(Tabs[I].Text);
+        end;
+      except
+        on E: Exception do
+        begin
+          T.Log('Could not open ' + Tabs[I].FileName + ': ' + E.Message);
+        end;
+      end;
+      if Tabs[I].ConnName <> '' then
+      begin
+        if Tabs[I].Database <> '' then
+        begin
+          T.Log('Last session this tab was on ' + Tabs[I].ConnName + ' (' + Tabs[I].Database +
+            '). Connect to run it.');
+        end
+        else
+        begin
+          T.Log('Last session this tab was on ' + Tabs[I].ConnName + '. Connect to run it.');
+        end;
+      end;
+      if Tabs[I].Line > 1 then
+      begin
+        T.GoToLine(Tabs[I].Line);
+      end;
+      PageOfTab(T).Tab.Caption := T.DisplayCaption;
+      if I = ActiveAt then
+      begin
+        ActiveTab := T;
+      end;
+    end;
+    if ActiveTab <> nil then
+    begin
+      ActivateTab(ActiveTab);
+    end;
+    if Missing.Count > 0 then
+    begin
+      FStatus.Texts[2] := IntToStr(Missing.Count) + ' file(s) from last session aren''t there any more';
+    end;
+  finally
+    Missing.Free;
+  end;
 end;
 
 
@@ -6066,6 +7173,8 @@ begin
   AddActionItem(M, FActSave);
   AddActionItem(M, FActSaveAs);
   AddSeparator(M);
+  AddRecentMenu(M);
+  AddSeparator(M);
   AddActionItem(M, FActCloseTab);
   AddSeparator(M);
   AddActionItem(M, FActConnectOE);
@@ -6086,6 +7195,7 @@ begin
   AddActionItem(Sub, FActFind);
   AddActionItem(Sub, FActFindNext);
   AddActionItem(Sub, FActReplace);
+  AddActionItem(M, FActGoToLine);
   Sub := AddMenu(M, 'Ad&vanced');
   AddActionItem(Sub, FActComment);
   AddActionItem(Sub, FActUncomment);
@@ -6093,10 +7203,20 @@ begin
   AddActionItem(Sub, FActLower);
   AddActionItem(Sub, FActIndent);
   AddActionItem(Sub, FActOutdent);
+  AddSeparator(M);
+  AddActionItem(M, FActFormat);
+  AddActionItem(M, FActFormatQuick);
+  AddActionItem(M, FActComplete);
+  AddActionItem(M, FActJoinLines);
+  AddActionItem(M, FActConvertJoins);
 
   M := AddMenu(FMainMenu.Items, '&View');
   AddActionItem(M, FActOEFilter);
   AddActionItem(M, FActRefreshAll);
+  AddSeparator(M);
+  AddActionItem(M, FActZoomIn);
+  AddActionItem(M, FActZoomOut);
+  AddActionItem(M, FActZoomReset);
   AddSeparator(M);
   AddLayoutMenu(M);
   AddKeymapThemeMenus(M);
@@ -6240,7 +7360,7 @@ begin
     FPickLabels[I].AutoSize := False;
     FPickLabels[I].Width := 0;
     FPickLabels[I].Caption := '';
-    FPicks[I] := TComboBox.Create(Self);
+    FPicks[I] := TpgnFindCombo.Create(Self);
     FPicks[I].Parent := FPickPanel;
     FPicks[I].Style := csDropDownList;
     FPicks[I].AutoSize := False;
@@ -6881,6 +8001,7 @@ begin
   M := AddMenu(FMainMenu.Items, '&File');
   AddActionItem(M, FActNewTab);
   AddActionItem(M, FActOpen);
+  AddRecentMenu(M);
   AddActionItem(M, FActSave);
   AddActionItem(M, FActSaveAs);
   AddActionItem(M, FActCloseTab);
@@ -6903,12 +8024,20 @@ begin
   AddActionItem(M, FActIndent);
   AddActionItem(M, FActOutdent);
   AddSeparator(M);
+  AddActionItem(M, FActFormat);
+  AddActionItem(M, FActFormatQuick);
+  AddActionItem(M, FActComplete);
+  AddActionItem(M, FActJoinLines);
+  AddActionItem(M, FActConvertJoins);
+  AddSeparator(M);
   AddActionItem(M, FActOptions);
 
   M := AddMenu(FMainMenu.Items, '&Search');
   AddActionItem(M, FActFind);
   AddActionItem(M, FActFindNext);
   AddActionItem(M, FActReplace);
+  AddSeparator(M);
+  AddActionItem(M, FActGoToLine);
 
   M := AddMenu(FMainMenu.Items, 'Sess&ion');
   AddActionItem(M, FActNewConn);
@@ -6947,6 +8076,10 @@ begin
   M := AddMenu(FMainMenu.Items, '&View');
   AddActionItem(M, FActRefreshAll);
   AddSeparator(M);
+  AddActionItem(M, FActZoomIn);
+  AddActionItem(M, FActZoomOut);
+  AddActionItem(M, FActZoomReset);
+  AddSeparator(M);
   AddLayoutMenu(M);
   AddKeymapThemeMenus(M);
 
@@ -6965,7 +8098,7 @@ begin
 end;
 
 { Below the main toolbar: the session bar, the window bar, then the window
-  in view (the Editor, with its own toolbar, or the Schema Browser). }
+  in view (the Editor, with its own toolbar, or the Object Browser). }
 procedure TpgnMainForm.BuildAmphibianArea;
 const
   PickCaptions: array[0..2] of string = ('Session', 'Database', 'Schema');
@@ -7032,7 +8165,7 @@ begin
     FPickLabels[I] := TLabel.Create(Self);
     FPickLabels[I].Parent := FPickPanel;
     FPickLabels[I].Caption := PickCaptions[I];
-    FPicks[I] := TComboBox.Create(Self);
+    FPicks[I] := TpgnFindCombo.Create(Self);
     FPicks[I].Parent := FPickPanel;
     FPicks[I].Style := csDropDownList;
     FPicks[I].AutoSize := False;
@@ -7171,7 +8304,7 @@ procedure TpgnMainForm.MirrorTimerTick(Sender: TObject);
 var
   I, J, Idx: Integer;
   Want: TStringList;
-  Src: TComboBox;
+  Src: TpgnFindCombo;
   T: TpgnQueryTab;
   Differs: Boolean;
 begin
@@ -7257,14 +8390,14 @@ begin
   begin
     Exit;
   end;
-  W := (Sender as TComboBox).Tag;
+  W := (Sender as TpgnFindCombo).Tag;
   FActiveTab.PickInBand(W, FPicks[W].ItemIndex);
   MirrorTimerTick(nil);
   UpdateAmphBars;
 end;
 
 { The session bar lists the connections open in editor tabs; the window
-  bar the Editor, the Schema Browser and each DBA screen. }
+  bar the Editor, the Object Browser and each DBA screen. }
 procedure TpgnMainForm.UpdateAmphBars;
 var
   I: Integer;
@@ -7310,7 +8443,7 @@ begin
 
   FWindowBar.Clear;
   FWindowBar.Add('Editor', 'editor', enNone);
-  Cap := 'Schema Browser';
+  Cap := 'Object Browser';
   if FBrowser.ConnIndex >= 0 then
   begin
     Cap := Cap + ' (' + FBrowser.Info.User + '@' + FBrowser.Info.Name + ')';
@@ -7534,6 +8667,11 @@ end;
 
 procedure TpgnMainForm.BrowserSelect(Sender: TObject; AConnIndex: Integer; const ARef: TpgnObjectRef);
 begin
+  if ARef.Name = '' then
+  begin
+    ClearDetails('Details');
+    Exit;
+  end;
   ShowDetails(AConnIndex, ARef);
 end;
 

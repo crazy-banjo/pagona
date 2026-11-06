@@ -14,8 +14,8 @@ unit pgnAmphibian;
 
     TpgnStripBar       the session bar (one button per open connection,
                        its environment as text) and the window bar
-                       (Editor, Schema Browser, DBA screens)
-    TpgnSchemaBrowser  Database > Schema Browser: a schema, its object
+                       (Editor, Object Browser, DBA screens)
+    TpgnSchemaBrowser  Database > Object Browser: a schema, its object
                        types as buttons, a filtered list, and the details
                        of what's picked (the main window lends its
                        Details panel)
@@ -29,7 +29,7 @@ interface
 
 uses
   Classes, SysUtils, Controls, Graphics, StdCtrls, ExtCtrls, Buttons, Forms, Math, Menus,
-  LCLType, Types, Grids, pgnTypes, pgnTheme, pgnAdapter, pgnResultGrid;
+  LCLType, Types, Grids, pgnFindCombo, pgnTypes, pgnTheme, pgnAdapter, pgnResultGrid;
 
 type
   TpgnStripItem = record
@@ -97,14 +97,13 @@ type
     FLeft: TPanel;
     FTop: TPanel;
     FDbLabel: TLabel;
-    FDbCombo: TComboBox;
+    FDbCombo: TpgnFindCombo;
     FSchemaLabel: TLabel;
-    FSchemaCombo: TComboBox;
+    FSchemaCombo: TpgnFindCombo;
     FRefresh: TButton;
-    FTypePanel: TPanel;
-    FTypeButtons: array of TSpeedButton;
-    FMoreButton: TSpeedButton;
-    FMoreMenu: TPopupMenu;
+    FTypeLabel: TLabel;
+    FTypeCombo: TComboBox;
+    FTypeOf: array of Integer;   // FTypeCombo row -> FTypes index (-1: the line)
     FFilter: TEdit;
     FList: TpgnResultGrid;
     FShown: TStringList;         // the names in the list, in order
@@ -124,7 +123,6 @@ type
     function Container: string;
     procedure BuildTypes;
     procedure LayoutTop(Sender: TObject);
-    procedure LayoutTypes(Sender: TObject);
     procedure FillDatabases;
     procedure FillSchemas;
     procedure LoadList;
@@ -132,9 +130,8 @@ type
     function RefOf(AIndex: Integer): TpgnObjectRef;
     procedure DbChange(Sender: TObject);
     procedure SchemaChange(Sender: TObject);
-    procedure TypeClick(Sender: TObject);
-    procedure MoreClick(Sender: TObject);
-    procedure MoreItemClick(Sender: TObject);
+    procedure TypeChange(Sender: TObject);
+    procedure SelectSoon;
     procedure PickType(AIndex: Integer);
     procedure FilterChange(Sender: TObject);
     procedure ListSelect(Sender: TObject; aCol, aRow: Integer);
@@ -142,6 +139,9 @@ type
     procedure ListDblClick(Sender: TObject);
     procedure ListMouseUp(Sender: TObject; Button: TMouseButton; Shift: TShiftState; X, Y: Integer);
     procedure ListKeyDown(Sender: TObject; var Key: Word; Shift: TShiftState);
+    procedure ListUTF8KeyPress(Sender: TObject; var UTF8Key: TUTF8Char);
+    procedure ListClick(Sender: TObject);
+    procedure FilterKeyDown(Sender: TObject; var Key: Word; Shift: TShiftState);
     procedure SelectTimerTick(Sender: TObject);
     procedure RefreshClick(Sender: TObject);
   public
@@ -152,7 +152,7 @@ type
     procedure Detach;
     procedure Reload;
     { Shows one object: its database and schema, its type, selected in the
-      list (the Describe window's Show in Schema Browser). }
+      list (the Describe window's Show in Object Browser). }
     procedure ShowObject(const ARef: TpgnObjectRef);
     property ConnIndex: Integer read FConnIndex;
     property Info: TpgnConnectionInfo read FInfo;
@@ -170,6 +170,10 @@ type
 function FilterMatches(const AFilter, AName: string): Boolean;
 
 implementation
+
+const
+  // between the everyday and the rarely used types in the Type drop-down
+  TypeLine = #$E2#$94#$80#$E2#$94#$80#$E2#$94#$80#$E2#$94#$80#$E2#$94#$80#$E2#$94#$80#$E2#$94#$80#$E2#$94#$80;
 
 function Mix(A, B: TColor; AWeightA: Integer): TColor;
 var
@@ -537,7 +541,7 @@ begin
   FDbLabel := TLabel.Create(Self);
   FDbLabel.Parent := FTop;
   FDbLabel.Caption := 'Database';
-  FDbCombo := TComboBox.Create(Self);
+  FDbCombo := TpgnFindCombo.Create(Self);
   FDbCombo.Parent := FTop;
   FDbCombo.Style := csDropDownList;
   FDbCombo.AutoSize := False;
@@ -545,7 +549,7 @@ begin
   FSchemaLabel := TLabel.Create(Self);
   FSchemaLabel.Parent := FTop;
   FSchemaLabel.Caption := 'Schema';
-  FSchemaCombo := TComboBox.Create(Self);
+  FSchemaCombo := TpgnFindCombo.Create(Self);
   FSchemaCombo.Parent := FTop;
   FSchemaCombo.Style := csDropDownList;
   FSchemaCombo.AutoSize := False;
@@ -554,23 +558,24 @@ begin
   FRefresh.Parent := FTop;
   FRefresh.Caption := 'Refresh';
   FRefresh.OnClick := @RefreshClick;
-
-  FTypePanel := TPanel.Create(Self);
-  FTypePanel.Parent := FLeft;
-  FTypePanel.Align := alTop;
-  FTypePanel.Top := FTop.Top + FTop.Height + 1;
-  FTypePanel.Height := S(60);
-  FTypePanel.BevelOuter := bvNone;
-  FTypePanel.Caption := '';
-  FTypePanel.OnResize := @LayoutTypes;
+  FTypeLabel := TLabel.Create(Self);
+  FTypeLabel.Parent := FTop;
+  FTypeLabel.Caption := 'Type';
+  FTypeCombo := TComboBox.Create(Self);
+  FTypeCombo.Parent := FTop;
+  FTypeCombo.Style := csDropDownList;
+  FTypeCombo.AutoSize := False;
+  FTypeCombo.DropDownCount := 24;
+  FTypeCombo.OnChange := @TypeChange;
 
   FFilter := TEdit.Create(Self);
   FFilter.Parent := FLeft;
   FFilter.Align := alTop;
-  FFilter.Top := FTypePanel.Top + FTypePanel.Height + 1;
+  FFilter.Top := FTop.Top + FTop.Height + 1;
   FFilter.TextHint := 'Filter, e.g. SPR% (starts with SPR) or HOLD (contains HOLD)';
   FFilter.BorderSpacing.Around := S(4);
   FFilter.OnChange := @FilterChange;
+  FFilter.OnKeyDown := @FilterKeyDown;
 
   FCount := TLabel.Create(Self);
   FCount.Parent := FLeft;
@@ -590,6 +595,8 @@ begin
   FList.OnDblClick := @ListDblClick;
   FList.OnMouseUp := @ListMouseUp;
   FList.OnKeyDown := @ListKeyDown;
+  FList.OnUTF8KeyPress := @ListUTF8KeyPress;
+  FList.OnClick := @ListClick;
 
   Split := TSplitter.Create(Self);
   Split.Parent := Self;
@@ -683,7 +690,7 @@ begin
   CH := FDbCombo.Height;
   ShowSchema := (FRoot <> nil) and FRoot.HasSchemas;
   ShowDb := (not ShowSchema) or (FDbCombo.Items.Count > 1);
-  LW := Max(FDbLabel.Width, FSchemaLabel.Width);
+  LW := Max(Max(FDbLabel.Width, FSchemaLabel.Width), FTypeLabel.Width);
   RowH := CH + S(6);
   X := S(6) + LW + S(8);
   W := Max(FTop.ClientWidth - X - FRefresh.Width - S(14), S(80));
@@ -711,6 +718,9 @@ begin
     FSchemaLabel.SetBounds(-2000, 0, FSchemaLabel.Width, FSchemaLabel.Height);
     FSchemaCombo.SetBounds(-2000, 0, W, CH);
   end;
+  FTypeLabel.SetBounds(S(6), Y + (CH - FTypeLabel.Height) div 2, FTypeLabel.Width, FTypeLabel.Height);
+  FTypeCombo.SetBounds(X, Y, W, CH);
+  Y := Y + RowH;
   FRefresh.SetBounds(FTop.ClientWidth - FRefresh.Width - S(6), S(4), FRefresh.Width, CH);
   if FTop.Height <> Y + S(2) then
   begin
@@ -718,59 +728,9 @@ begin
   end;
 end;
 
-{ The type buttons wrap onto as many rows as they need. }
-procedure TpgnSchemaBrowser.LayoutTypes(Sender: TObject);
-var
-  I, X, Y, W, H, Gap, Want: Integer;
-  C: TCanvas;
-  B: TSpeedButton;
-begin
-  if Length(FTypeButtons) = 0 then
-  begin
-    Exit;
-  end;
-  C := FTypeButtons[0].Canvas;
-  Gap := S(3);
-  H := S(24);
-  X := S(4);
-  Y := S(4);
-  for I := 0 to Length(FTypeButtons) do
-  begin
-    if I < Length(FTypeButtons) then
-    begin
-      B := FTypeButtons[I];
-    end
-    else
-    begin
-      B := FMoreButton;
-    end;
-    if B = nil then
-    begin
-      Continue;
-    end;
-    C.Font.Assign(B.Font);
-    C.Font.Style := [fsBold];
-    W := C.TextWidth(B.Caption) + S(16);
-    if (X + W > FTypePanel.ClientWidth - S(4)) and (X > S(4)) then
-    begin
-      X := S(4);
-      Y := Y + H + Gap;
-    end;
-    B.SetBounds(X, Y, W, H);
-    X := X + W + Gap;
-  end;
-  Want := Y + H + S(4);
-  if FTypePanel.Height <> Want then
-  begin
-    FTypePanel.Height := Want;
-  end;
-end;
-
 procedure TpgnSchemaBrowser.BuildTypes;
 var
-  I: Integer;
-  B: TSpeedButton;
-  Item: TMenuItem;
+  I, Pass: Integer;
   Extra: TpgnStringArray;
 
   procedure AddType(const ACaption, AKind, AFolder: string; ALevel: TpgnFolderLevel; ARare: Boolean);
@@ -798,16 +758,8 @@ var
   end;
 
 begin
-  for I := 0 to High(FTypeButtons) do
-  begin
-    FTypeButtons[I].Free;
-  end;
-  SetLength(FTypeButtons, 0);
-  FreeAndNil(FMoreButton);
-  if FMoreMenu <> nil then
-  begin
-    FMoreMenu.Items.Clear;
-  end;
+  FTypeCombo.Items.Clear;
+  SetLength(FTypeOf, 0);
   SetLength(FTypes, 0);
   if FRoot = nil then
   begin
@@ -845,94 +797,70 @@ begin
   begin
     FTypeIndex := 0;
   end;
-  for I := 0 to High(FTypes) do
-  begin
-    if FTypes[I].Rare then
+  // the everyday types, then a line, then the rarely used ones
+  FTypeCombo.Items.BeginUpdate;
+  try
+    for Pass := 0 to 1 do
     begin
-      // the rarely used ones wait in a menu behind "More"
-      if FMoreMenu = nil then
+      for I := 0 to High(FTypes) do
       begin
-        FMoreMenu := TPopupMenu.Create(Self);
+        if FTypes[I].Rare <> (Pass = 1) then
+        begin
+          Continue;
+        end;
+        if (Pass = 1) and (FTypeCombo.Items.IndexOf(TypeLine) < 0) then
+        begin
+          FTypeCombo.Items.Add(TypeLine);
+          SetLength(FTypeOf, Length(FTypeOf) + 1);
+          FTypeOf[High(FTypeOf)] := -1;
+        end;
+        FTypeCombo.Items.Add(FTypes[I].Caption);
+        SetLength(FTypeOf, Length(FTypeOf) + 1);
+        FTypeOf[High(FTypeOf)] := I;
       end;
-      Item := TMenuItem.Create(FMoreMenu);
-      Item.Caption := FTypes[I].Caption;
-      Item.Tag := I;
-      Item.OnClick := @MoreItemClick;
-      FMoreMenu.Items.Add(Item);
-      if FMoreButton = nil then
-      begin
-        FMoreButton := TSpeedButton.Create(Self);
-        FMoreButton.Parent := FTypePanel;
-        FMoreButton.GroupIndex := 1;
-        FMoreButton.AllowAllUp := False;
-        FMoreButton.OnClick := @MoreClick;
-        FMoreButton.Caption := 'More...';
-      end;
-      Continue;
     end;
-    B := TSpeedButton.Create(Self);
-    B.Parent := FTypePanel;
-    B.Caption := FTypes[I].Caption;
-    B.GroupIndex := 1;
-    B.AllowAllUp := False;
-    B.Tag := I;
-    B.OnClick := @TypeClick;
-    SetLength(FTypeButtons, Length(FTypeButtons) + 1);
-    FTypeButtons[High(FTypeButtons)] := B;
+  finally
+    FTypeCombo.Items.EndUpdate;
   end;
   PickType(FTypeIndex);
 end;
 
-{ Marks the type in view: its button down and bold (a More type shows its
-  name on the More button). }
+{ Shows the type in view in the Type drop-down. }
 procedure TpgnSchemaBrowser.PickType(AIndex: Integer);
 var
   I: Integer;
 begin
   FTypeIndex := AIndex;
-  for I := 0 to High(FTypeButtons) do
-  begin
-    FTypeButtons[I].Down := FTypeButtons[I].Tag = AIndex;
-    if FTypeButtons[I].Down then
+  FFilling := True;
+  try
+    for I := 0 to High(FTypeOf) do
     begin
-      FTypeButtons[I].Font.Style := [fsBold];
-    end
-    else
-    begin
-      FTypeButtons[I].Font.Style := [];
+      if FTypeOf[I] = AIndex then
+      begin
+        FTypeCombo.ItemIndex := I;
+      end;
     end;
+  finally
+    FFilling := False;
   end;
-  if FMoreButton <> nil then
-  begin
-    if (AIndex <= High(FTypes)) and FTypes[AIndex].Rare then
-    begin
-      FMoreButton.Caption := 'More: ' + FTypes[AIndex].Caption;
-      FMoreButton.Down := True;
-      FMoreButton.Font.Style := [fsBold];
-    end
-    else
-    begin
-      FMoreButton.Caption := 'More...';
-      FMoreButton.Down := False;
-      FMoreButton.Font.Style := [];
-    end;
-  end;
-  LayoutTypes(nil);
 end;
 
-procedure TpgnSchemaBrowser.MoreClick(Sender: TObject);
+procedure TpgnSchemaBrowser.TypeChange(Sender: TObject);
 var
-  P: TPoint;
+  I: Integer;
 begin
-  // the button stays as it was until a type is picked from the menu
-  PickType(FTypeIndex);
-  P := FMoreButton.ClientToScreen(Point(0, FMoreButton.Height));
-  FMoreMenu.PopUp(P.X, P.Y);
-end;
-
-procedure TpgnSchemaBrowser.MoreItemClick(Sender: TObject);
-begin
-  PickType((Sender as TMenuItem).Tag);
+  if FFilling then
+  begin
+    Exit;
+  end;
+  I := FTypeCombo.ItemIndex;
+  if (I < 0) or (I > High(FTypeOf)) or (FTypeOf[I] < 0) then
+  begin
+    // the line between the everyday and the rare types: not a type
+    PickType(FTypeIndex);
+    Exit;
+  end;
+  PickType(FTypeOf[I]);
   LoadList;
 end;
 
@@ -1190,6 +1118,9 @@ begin
     FCount.Caption := Word + FormatFloat('#,##0', FAll.Count) + ' ' + #$C2#$B7 + ' ' +
       FormatFloat('#,##0', FShown.Count) + ' shown';
   end;
+  // the first row comes up picked, so its details come up with it (or the
+  // details clear when the list is empty)
+  SelectSoon;
 end;
 
 function TpgnSchemaBrowser.ListIndex: Integer;
@@ -1290,6 +1221,7 @@ begin
     begin
       FList.SetFocus;
     end;
+    SelectSoon;
   end;
 end;
 
@@ -1313,11 +1245,6 @@ begin
   LoadList;
 end;
 
-procedure TpgnSchemaBrowser.TypeClick(Sender: TObject);
-begin
-  PickType((Sender as TSpeedButton).Tag);
-  LoadList;
-end;
 
 procedure TpgnSchemaBrowser.FilterChange(Sender: TObject);
 begin
@@ -1326,8 +1253,54 @@ end;
 
 procedure TpgnSchemaBrowser.ListSelect(Sender: TObject; aCol, aRow: Integer);
 begin
+  SelectSoon;
+end;
+
+{ The details follow the pick a moment later, so arrowing down a long list
+  doesn't read every object on the way. }
+procedure TpgnSchemaBrowser.SelectSoon;
+begin
   FSelectTimer.Enabled := False;
   FSelectTimer.Enabled := True;
+end;
+
+{ A click on the row already picked shows it again (the details may have
+  moved on, or never loaded). }
+procedure TpgnSchemaBrowser.ListClick(Sender: TObject);
+begin
+  SelectSoon;
+end;
+
+{ Typing a letter in the list starts a filter with it. }
+procedure TpgnSchemaBrowser.ListUTF8KeyPress(Sender: TObject; var UTF8Key: TUTF8Char);
+begin
+  if (UTF8Key = '') or (UTF8Key[1] < ' ') or (UTF8Key = #127) then
+  begin
+    Exit;
+  end;
+  if FFilter.CanFocus then
+  begin
+    FFilter.SetFocus;
+    FFilter.Text := UTF8Key;
+    FFilter.SelStart := Length(FFilter.Text);
+    FFilter.SelLength := 0;
+  end;
+  UTF8Key := '';
+end;
+
+{ Down (or Enter) in the filter goes to the list. }
+procedure TpgnSchemaBrowser.FilterKeyDown(Sender: TObject; var Key: Word; Shift: TShiftState);
+begin
+  if ((Key = VK_DOWN) or (Key = VK_RETURN)) and (FShown.Count > 0) and FList.CanFocus then
+  begin
+    FList.SetFocus;
+    if FList.Row < 1 then
+    begin
+      FList.Row := 1;
+    end;
+    SelectSoon;
+    Key := 0;
+  end;
 end;
 
 procedure TpgnSchemaBrowser.SelectTimerTick(Sender: TObject);
@@ -1338,6 +1311,19 @@ begin
   FSelectTimer.Enabled := False;
   if ListIndex < 0 then
   begin
+    // nothing picked: the details clear rather than keep the last object
+    if FRoot <> nil then
+    begin
+      FHeader.Caption := 'Pick an object on the left';
+    end;
+    if Assigned(FOnSelect) and (FConnIndex >= 0) then
+    begin
+      R.Database := '';
+      R.Schema := '';
+      R.Name := '';
+      R.Kind := '';
+      FOnSelect(Self, FConnIndex, R);
+    end;
     Exit;
   end;
   R := RefOf(ListIndex);

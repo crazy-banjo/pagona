@@ -58,6 +58,15 @@ const
   actResultsGrid  = 'actResultsGrid';
   actResultsText  = 'actResultsText';
   actResultsFile  = 'actResultsFile';
+  actGoToLine     = 'actGoToLine';
+  actZoomIn       = 'actZoomIn';
+  actZoomOut      = 'actZoomOut';
+  actZoomReset    = 'actZoomReset';
+  actFormatSql    = 'actFormatSql';
+  actJoinLines    = 'actJoinLines';
+  actConvertJoins = 'actConvertJoins';
+  actFormatQuick  = 'actFormatQuick';
+  actComplete     = 'actComplete';
 
   KeymapMatchLayout = 'Match layout';
   KeymapPagona      = 'Pagona';
@@ -128,6 +137,9 @@ begin
   Bind(AActions, actToggleComment, [ShortCut(VK_OEM_2, [ssCtrl])]);            // Ctrl+/
   Bind(AActions, actBlockComment, [ShortCut(VK_OEM_2, [ssCtrl, ssShift])]);    // Ctrl+Shift+/
   Bind(AActions, actReplace,      [ShortCut(VK_R, [ssCtrl])]);
+  Bind(AActions, actFormatSql,    [ShortCut(VK_F, [ssCtrl, ssShift])]);
+  Bind(AActions, actFormatQuick,  [ShortCut(VK_F, [ssCtrl, ssAlt])]);
+  Bind(AActions, actComplete,     [ShortCut(VK_SPACE, [ssCtrl])]);
 end;
 
 procedure ApplyAmphibian(AActions: TActionList);
@@ -140,6 +152,11 @@ begin
   Bind(AActions, actComment,      [ShortCut(VK_B, [ssCtrl])]);
   Bind(AActions, actUncomment,    [ShortCut(VK_B, [ssCtrl, ssShift])]);
   Bind(AActions, actReplace,      [ShortCut(VK_R, [ssCtrl])]);
+  // Toad's Format Code key
+  Bind(AActions, actFormatSql,    [ShortCut(VK_F, [ssCtrl, ssShift])]);
+  Bind(AActions, actFormatQuick,  [ShortCut(VK_F, [ssCtrl, ssAlt])]);
+  // (Toad's Ctrl+Shift+C is the grid's Copy with Headers in Pagona)
+  Bind(AActions, actComplete,     [ShortCut(VK_SPACE, [ssCtrl])]);
 end;
 
 procedure ApplySeattle(AActions: TActionList);
@@ -150,7 +167,10 @@ begin
   Bind(AActions, actDescribe,     [ShortCut(VK_F1, [ssAlt])]);
   Bind(AActions, actReplace,      [ShortCut(VK_H, [ssCtrl])]);
   Bind(AActions, actCancel,       [ShortCut(VK_PAUSE, [ssAlt]), ShortCut(VK_CANCEL, [ssAlt])]);
-  // comments: Ctrl+K Ctrl+C / Ctrl+K Ctrl+U, see the main window
+  // SSMS's List Members, and its Complete Word
+  Bind(AActions, actComplete,     [ShortCut(VK_J, [ssCtrl]), ShortCut(VK_SPACE, [ssCtrl])]);
+  // comments: Ctrl+K Ctrl+C / Ctrl+K Ctrl+U, Format SQL: Ctrl+K Ctrl+F (Ctrl+Shift+F is
+  // Results to File), see the main window
 end;
 
 { SSMS's own keys for the window commands (after the common ones). }
@@ -188,6 +208,12 @@ begin
   Bind(AActions, actSaveFileAs, [ShortCut(VK_S, [ssCtrl, ssShift])]);
   Bind(AActions, actFind,     [ShortCut(VK_F, [ssCtrl])]);
   Bind(AActions, actFindNext, [ShortCut(VK_F3, [])]);
+  Bind(AActions, actGoToLine, [ShortCut(VK_G, [ssCtrl])]);
+  // Ctrl+= is Ctrl and the plus key without Shift; the keypad's + and - too
+  Bind(AActions, actZoomIn,   [ShortCut(VK_OEM_PLUS, [ssCtrl]), ShortCut(VK_ADD, [ssCtrl]),
+    ShortCut(VK_OEM_PLUS, [ssCtrl, ssShift])]);
+  Bind(AActions, actZoomOut,  [ShortCut(VK_OEM_MINUS, [ssCtrl]), ShortCut(VK_SUBTRACT, [ssCtrl])]);
+  Bind(AActions, actZoomReset, [ShortCut(VK_0, [ssCtrl]), ShortCut(VK_NUMPAD0, [ssCtrl])]);
 end;
 
 procedure ApplyKeymap(AActions: TActionList; const AProfile: string);

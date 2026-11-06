@@ -51,6 +51,7 @@ type
     FSavepoints: TpgnStringArray;   // per statement: the savepoint set before it, or ''
     FSavepointBase: string;
     FSavepointStart: Integer;
+    FSavepointAll: Boolean;
     FTransactionalDDL: Boolean;
     FFreshSnapshot: Boolean;
     procedure DoDone;
@@ -77,6 +78,9 @@ type
       away if it fails. '' = none. Set before Start. }
     property SavepointBase: string read FSavepointBase write FSavepointBase;
     property SavepointStart: Integer read FSavepointStart write FSavepointStart;
+    { A savepoint before reads too (PostgreSQL's On error, roll back): an
+      error then undoes only its statement. }
+    property SavepointAll: Boolean read FSavepointAll write FSavepointAll;
     { PostgreSQL: DDL waits for Commit too, so it gets a savepoint. }
     property TransactionalDDL: Boolean read FTransactionalDDL write FTransactionalDDL;
     { MySQL, auto-commit off, nothing pending: end the reads-only transaction
@@ -211,7 +215,7 @@ begin
     end;
     FCurrent := I + 1;
 
-    if (FSavepointBase <> '') and (StatementChangesData(FStatements[I]) or
+    if (FSavepointBase <> '') and (FSavepointAll or StatementChangesData(FStatements[I]) or
       (FTransactionalDDL and StatementIsDDL(FStatements[I]))) then
     begin
       SP := FSavepointBase + IntToStr(FSavepointStart + I);
@@ -240,7 +244,8 @@ begin
         begin
           try
             FAdapter.Execute('ROLLBACK TO SAVEPOINT ' + FSavepoints[I], 0).Free;
-            FMessages.Add(Format('Statement %d was undone; earlier uncommitted changes are kept.', [I + 1]));
+            FMessages.Add(Format('Statement %d was undone on its own; the transaction is still open and ' +
+              'earlier uncommitted changes are kept.', [I + 1]));
           except
             on E2: Exception do
             begin
@@ -254,6 +259,20 @@ begin
     end;
 
     Inc(FExecuted);
+    // a read's savepoint isn't needed once it has run
+    if FSavepointAll and (FSavepoints[I] <> '') and not StatementChangesData(FStatements[I]) and
+      not (FTransactionalDDL and StatementIsDDL(FStatements[I])) then
+    begin
+      try
+        FAdapter.Execute('RELEASE SAVEPOINT ' + FSavepoints[I], 0).Free;
+      except
+        on E: Exception do
+        begin
+          // harmless: it ends with the transaction
+        end;
+      end;
+      FSavepoints[I] := '';
+    end;
     // what the server said along the way (SQL Server's PRINT, row counts)
     for Sets := 0 to High(R.Messages) do
     begin

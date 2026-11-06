@@ -32,7 +32,7 @@ Pagona doesn't restrict what you can run. Whatever your database privileges allo
 View > Layout picks how the window is arranged. On Windows it switches on the spot, keeping your open tabs, connections and remembered passwords; on Linux Pagona restarts to be sure everything changes:
 
 - **Plume** (the default): the Explorer on the left, query tabs on the right, each tab with its environment band.
-- **Amphibian**: Toad's arrangement and wording. Session > New Connection lists your saved connections, as Toad's login window does (it opens by itself at start). A small-icon main toolbar; a session bar with one button per open connection; a window bar with Editor, Schema Browser and each DBA screen; the Editor with its own toolbar and the Session / Database / Schema pickers; Toad's result tabs (Messages, Data Grid, DBMS Output, Explain Plan, History); Database > Schema Browser with object types, a Toad-style filter (`SPR%`) and the details of what's picked. Menus use Toad's names (Execute Statement, Execute as Script, Session Browser, ...).
+- **Amphibian**: Toad's arrangement and wording. Session > New Connection lists your saved connections, as Toad's login window does (it opens by itself at start). A small-icon main toolbar; a session bar with one button per open connection; a window bar with Editor, Object Browser and each DBA screen; the Editor with its own toolbar and the Session / Database / Schema pickers; Toad's result tabs (Messages, Data Grid, DBMS Output, Explain Plan, History); Database > Object Browser (Toad calls it the Schema Browser) with object types, a Toad-style filter (`SPR%`) and the details of what's picked. Menus use Toad's names (Execute Statement, Execute as Script, Session Browser, ...).
 - **Seattle**: SSMS's arrangement and wording. Connect to Server opens at start; Object Explorer on the left lists the servers you've connected, named as SSMS names them, with Connect, Disconnect, Filter, Refresh and Activity Monitor on its own bar (right-click a server for Activity Monitor, Locks and Blocking, Users and Roles). Under the main toolbar, SSMS's SQL Editor toolbar: Connect, Change Connection, the database box, Execute, Cancel, the estimated plan, comment and indent. Query tabs are named as SSMS names them (`SQLQuery1.sql - server.database (login (session id))`), with a Ln / Ch line under the editor; Results (several result sets stacked, as SSMS), Messages, Execution Plan and History; and SSMS's query status bar, in the environment's color with the environment in words. Seattle tabs start with auto-commit on, as SSMS (Edit > Options has its own setting); closing with uncommitted work asks SSMS's question. There's no DBA menu, as in SSMS: those screens open from Object Explorer; Tools has the DBA log and Options.
 
 Edit > Find (Ctrl+F), Find Next (F3) and Replace work in every layout.
@@ -149,7 +149,7 @@ the unit below.
 | `pgnOdbc` | A small ODBC client (loaded at run time): result sets, messages, cancel |
 | `pgnPendingWin` | Pending Statements: what waits for Commit, with Commit All / Roll Back All / Undo From Here |
 | `pgnConnectWin` | Amphibian's New Connection window: the saved connections to pick from |
-| `pgnAmphibian` | Amphibian layout pieces: session and window bars, Schema Browser |
+| `pgnAmphibian` | Amphibian layout pieces: session and window bars, Object Browser |
 | `pgnIcons` | Small two-tone and bold toolbar icons, drawn from shapes |
 | `pgnAdapters` | Factory: engine → adapter class |
 | `pgnSqlSplit` | Statement splitting (quotes and comments aware) |

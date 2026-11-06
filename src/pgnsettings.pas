@@ -19,7 +19,7 @@ unit pgnSettings;
 interface
 
 uses
-  Classes, SysUtils, fpjson, jsonparser, pgnKeymap, pgnTheme;
+  Classes, SysUtils, Math, fpjson, jsonparser, pgnKeymap, pgnTheme, pgnSqlFormat;
 
 type
   TpgnSettings = class
@@ -33,8 +33,17 @@ type
     Look: string;                   // the frame's colors: Match layout, Plume, Amphibian or Seattle
     LogEveryStatement: Boolean;     // long scripts too (otherwise only problems + summary)
     AutoCommitNewTabs: Boolean;     // a tab starts with auto-commit on (default off, as Toad)
+    PgErrorRollback: string;        // PostgreSQL, on error roll back the statement: off / interactive / on (psql's ON_ERROR_ROLLBACK)
+    CodeCompletion: Boolean;        // the list of columns after a dot, and Complete Code
     AutoCommitSeattle: Boolean;     // Seattle's own: on by default, as SSMS
     DBAMode: Boolean;               // the Explorer shows a DBA's folders too
+    EditorFontSize: Integer;        // the SQL editors' text size (zoom), in points
+    ReopenTabs: Boolean;            // open last session's tabs again at start
+    RecentFiles: TStringList;       // File > Recent Files, newest first
+    FormatOpt: TpgnFormatOptions;   // 0.2.0's single format (read once, to become a profile)
+    HadFormatOpt: Boolean;          // the settings file had that entry
+    FormatProfile: string;          // the profile Format SQL uses: default, local:Name, shared:Name
+    SharedFormatFolder: string;     // a team's shared profiles ('' = none)
     { Toolbar buttons per layout, as "Layout=id,id,|,id" (| = separator).
       A layout with no entry uses its default buttons. }
     Toolbars: TStringList;
@@ -45,11 +54,46 @@ type
     function FileName: string;
   end;
 
+const
+  DefaultEditorFontSize = 10;
+  MinEditorFontSize = 6;
+  MaxEditorFontSize = 36;
+  MaxRecentFiles = 10;
+
+{ Puts a file at the top of the recent list (once), keeping the newest ten. }
+procedure AddRecentFile(AList: TStrings; const AFileName: string);
+
 function PagonaConfigDir: string;
 function ReadTextFile(const AFileName: string): string;
 procedure WriteTextFile(const AFileName, AText: string);
 
 implementation
+
+procedure AddRecentFile(AList: TStrings; const AFileName: string);
+var
+  I: Integer;
+begin
+  if AFileName = '' then
+  begin
+    Exit;
+  end;
+  for I := AList.Count - 1 downto 0 do
+  begin
+    {$IFDEF WINDOWS}
+    if SameText(AList[I], AFileName) then
+    {$ELSE}
+    if AList[I] = AFileName then
+    {$ENDIF}
+    begin
+      AList.Delete(I);
+    end;
+  end;
+  AList.Insert(0, AFileName);
+  while AList.Count > MaxRecentFiles do
+  begin
+    AList.Delete(AList.Count - 1);
+  end;
+end;
 
 function PagonaConfigDir: string;
 begin
@@ -94,15 +138,25 @@ begin
   Theme := ThemePlume;
   LogEveryStatement := False;
   AutoCommitNewTabs := False;
+  PgErrorRollback := 'off';
+  CodeCompletion := True;
   AutoCommitSeattle := True;
   Look := 'Match layout';
   DBAMode := False;
+  EditorFontSize := DefaultEditorFontSize;
+  ReopenTabs := True;
+  FormatOpt := DefaultFormatOptions;
+  HadFormatOpt := False;
+  FormatProfile := 'default';
+  SharedFormatFolder := '';
   Toolbars := TStringList.Create;
+  RecentFiles := TStringList.Create;
 end;
 
 destructor TpgnSettings.Destroy;
 begin
   Toolbars.Free;
+  RecentFiles.Free;
   inherited Destroy;
 end;
 
@@ -114,7 +168,8 @@ end;
 procedure TpgnSettings.Load;
 var
   Data: TJSONData;
-  O, T: TJSONObject;
+  O, T, FO: TJSONObject;
+  A: TJSONArray;
   I: Integer;
 begin
   if not FileExists(FileName) then
@@ -135,9 +190,63 @@ begin
         Theme := NormalizeThemeName(O.Get('theme', Theme));
         LogEveryStatement := O.Get('logEveryStatement', LogEveryStatement);
         AutoCommitNewTabs := O.Get('autoCommitNewTabs', AutoCommitNewTabs);
+        PgErrorRollback := LowerCase(O.Get('pgErrorRollback', PgErrorRollback));
+        if (PgErrorRollback <> 'off') and (PgErrorRollback <> 'interactive') and (PgErrorRollback <> 'on') then
+        begin
+          PgErrorRollback := 'off';
+        end;
+        CodeCompletion := O.Get('codeCompletion', CodeCompletion);
         AutoCommitSeattle := O.Get('autoCommitSeattle', AutoCommitSeattle);
         Look := O.Get('look', Look);
         DBAMode := O.Get('dbaMode', DBAMode);
+        EditorFontSize := O.Get('editorFontSize', EditorFontSize);
+        if (EditorFontSize < MinEditorFontSize) or (EditorFontSize > MaxEditorFontSize) then
+        begin
+          EditorFontSize := DefaultEditorFontSize;
+        end;
+        ReopenTabs := O.Get('reopenTabs', ReopenTabs);
+        RecentFiles.Clear;
+        if O.Find('recentFiles') is TJSONArray then
+        begin
+          A := TJSONArray(O.Find('recentFiles'));
+          for I := 0 to A.Count - 1 do
+          begin
+            if (A.Items[I] is TJSONString) and (RecentFiles.Count < MaxRecentFiles) then
+            begin
+              RecentFiles.Add(A.Items[I].AsString);
+            end;
+          end;
+        end;
+        FormatProfile := O.Get('formatProfile', FormatProfile);
+        SharedFormatFolder := O.Get('sharedFormatFolder', SharedFormatFolder);
+        if O.Find('format') is TJSONObject then
+        begin
+          HadFormatOpt := True;
+          FO := TJSONObject(O.Find('format'));
+          case FO.Get('keywordCase', 'upper') of
+            'lower':
+              begin
+                FormatOpt.KeywordCase := kcLower;
+              end;
+            'asTyped':
+              begin
+                FormatOpt.KeywordCase := kcAsTyped;
+              end;
+          else
+            begin
+              FormatOpt.KeywordCase := kcUpper;
+            end;
+          end;
+          FormatOpt.IndentSize := EnsureRange(FO.Get('indent', FormatOpt.IndentSize), 1, 8);
+          FormatOpt.UseTabs := FO.Get('tabs', FormatOpt.UseTabs);
+          FormatOpt.LeadingCommas := FO.Get('leadingCommas', FormatOpt.LeadingCommas);
+          FormatOpt.OneColumnPerLine := FO.Get('oneColumnPerLine', FormatOpt.OneColumnPerLine);
+          FormatOpt.LineWidth := EnsureRange(FO.Get('lineWidth', FormatOpt.LineWidth), 40, 400);
+          FormatOpt.AndOrNewLine := FO.Get('andOrNewLine', FormatOpt.AndOrNewLine);
+          FormatOpt.JoinIndented := FO.Get('joinIndented', FormatOpt.JoinIndented);
+          FormatOpt.River := FO.Get('river', FormatOpt.River);
+          FormatOpt.BlankLineBetween := FO.Get('blankLineBetween', FormatOpt.BlankLineBetween);
+        end;
         Toolbars.Clear;
         if O.Find('toolbars') is TJSONObject then
         begin
@@ -162,6 +271,7 @@ end;
 procedure TpgnSettings.Save;
 var
   O, T: TJSONObject;
+  A: TJSONArray;
   I: Integer;
 begin
   O := TJSONObject.Create;
@@ -174,9 +284,21 @@ begin
     O.Add('theme', Theme);
     O.Add('logEveryStatement', LogEveryStatement);
     O.Add('autoCommitNewTabs', AutoCommitNewTabs);
+    O.Add('pgErrorRollback', PgErrorRollback);
+    O.Add('codeCompletion', CodeCompletion);
     O.Add('autoCommitSeattle', AutoCommitSeattle);
     O.Add('look', Look);
     O.Add('dbaMode', DBAMode);
+    O.Add('editorFontSize', EditorFontSize);
+    O.Add('reopenTabs', ReopenTabs);
+    A := TJSONArray.Create;
+    for I := 0 to RecentFiles.Count - 1 do
+    begin
+      A.Add(RecentFiles[I]);
+    end;
+    O.Add('recentFiles', A);
+    O.Add('formatProfile', FormatProfile);
+    O.Add('sharedFormatFolder', SharedFormatFolder);
     T := TJSONObject.Create;
     for I := 0 to Toolbars.Count - 1 do
     begin

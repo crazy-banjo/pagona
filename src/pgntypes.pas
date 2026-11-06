@@ -89,6 +89,23 @@ type
 
   { A saved connection profile. The password is never part of this record:
     it is asked for at connect time and only kept in memory by the adapter. }
+  { A stored function or procedure, as the data dictionary describes it
+    (never its source). }
+  TpgnRoutineInfo = record
+    Found: Boolean;
+    Owner: string;          // the schema
+    PackageName: string;    // '' for a standalone function or procedure
+    Name: string;
+    Kind: string;           // FUNCTION or PROCEDURE
+    ReturnType: string;     // '' for a procedure
+    Params: string;         // "P_PIDM IN NUMBER, P_CODE IN VARCHAR2"
+    Overloads: Integer;     // versions with the same name (a package can have several)
+    Status: string;         // VALID / INVALID
+    LastChanged: string;    // YYYY-MM-DD HH24:MI
+    Reads: string;          // tables and views it reads, comma separated
+    Note: string;           // what this login couldn't see
+  end;
+
   TpgnConnectionInfo = record
     Id: string;
     Name: string;
@@ -146,8 +163,8 @@ type
 
 const
   { The release number: also in pagona.lpi (Version Info) and the tag a
-    release is built from (v0.1.1). }
-  PagonaVersion = '0.1.1';
+    release is built from (v0.2.0). }
+  PagonaVersion = '0.2.5';
   PagonaCopyright = 'Copyright (C) 2026 Randy Morrow';
   PagonaSourceURL = 'https://github.com/crazy-banjo/pagona';
 

@@ -77,6 +77,13 @@ type
     { What depends on an object (views, code, foreign keys); nil if the
       engine can't say. }
     function DescribeUsedBy(const ADatabase, AName: string): TpgnResultSet; virtual;
+    { What an object reads (tables, views, other code); nil if the engine
+      can't say. }
+    function DescribeUses(const ADatabase, AName: string): TpgnResultSet; virtual;
+    { A function or procedure called as AName (name, pkg.name,
+      schema.name or schema.pkg.name), looked up from ADefault's schema:
+      its signature, status and what it reads. Never its source. }
+    function DescribeRoutine(const AName, ADefault: string): TpgnRoutineInfo; virtual;
     { The source of an object the routine calls don't cover (an Oracle
       package: spec and body); '' if none. }
     function ObjectScript(const ADatabase, AName, AKind: string): string; virtual;
@@ -441,6 +448,18 @@ end;
 function TpgnAdapter.DescribeUsedBy(const ADatabase, AName: string): TpgnResultSet;
 begin
   Result := nil;
+end;
+
+function TpgnAdapter.DescribeUses(const ADatabase, AName: string): TpgnResultSet;
+begin
+  Result := nil;
+end;
+
+function TpgnAdapter.DescribeRoutine(const AName, ADefault: string): TpgnRoutineInfo;
+begin
+  Result := Default(TpgnRoutineInfo);
+  Result.Name := AName;
+  Result.Note := 'Pagona can''t look this up for this database yet.';
 end;
 
 function TpgnAdapter.ObjectScript(const ADatabase, AName, AKind: string): string;

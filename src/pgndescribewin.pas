@@ -22,11 +22,11 @@ unit pgnDescribeWin;
     | [Columns] [Indexes] [Constraints] [Triggers] [Data] ...   |  <- pages
     |  (a grid, or the script)                                  |
     +-----------------------------------------------------------+
-    | [Show in Schema Browser]                 [Refresh] [Close]|
+    | [Show in Object Browser]                 [Refresh] [Close]|
     +-----------------------------------------------------------+
 
   F4 (Amphibian) or Alt+F1 (Plume, Seattle) adds an object to the open
-  window; + asks for a name. Each page is read when first shown, from the
+  window; + opens a search box (names show as you type). Each page is read when first shown, from the
   connection's Explorer session (never the tab's, which may be running a
   query). The tab rows are drawn by Pagona: the selected tab is white,
   bold, marked along its top and joined to the page; the others are
@@ -37,7 +37,7 @@ unit pgnDescribeWin;
 interface
 
 uses
-  Classes, SysUtils, Types, Forms, Controls, Graphics, StdCtrls, ExtCtrls, Dialogs, LCLType, LCLIntf, Math,
+  Classes, SysUtils, Types, Forms, Controls, Graphics, StdCtrls, ExtCtrls, Dialogs, LCLType, LCLIntf, Math, Grids,
   SynEdit, SynEditTypes, SynHighlighterSQL,
   pgnTypes, pgnAdapter, pgnTheme, pgnResultGrid;
 
@@ -50,7 +50,7 @@ type
   TpgnTabEvent = procedure(Sender: TObject; AIndex: Integer) of object;
 
   TpgnDescribePage = (dwColumns, dwIndexes, dwConstraints, dwTriggers, dwArguments, dwData,
-    dwScript, dwGrants, dwUsedBy);
+    dwScript, dwGrants, dwUsedBy, dwUses);
 
   { A row of tabs drawn so they read as tabs on every look. }
   TpgnTabStrip = class(TCustomControl)
@@ -146,7 +146,7 @@ type
     procedure BarResize(Sender: TObject);
   public
     { AOwner is Pagona's main window: this one stays in front of it.
-      ALayout picks the words (Schema Browser, Object Explorer, Explorer);
+      ALayout picks the words (Object Browser, Object Explorer, Explorer);
       the colors come from the look in use. }
     constructor CreateIn(AOwner: TCustomForm; const ALayout, AEditorTheme: string;
       AOnAdapter: TpgnDescribeAdapterFunc; AOnReveal: TpgnDescribeRevealEvent;
@@ -161,7 +161,7 @@ implementation
 
 const
   PageCaptions: array[TpgnDescribePage] of string = ('Columns', 'Indexes', 'Constraints',
-    'Triggers', 'Arguments', 'Data', 'Script', 'Grants', 'Used By');
+    'Triggers', 'Arguments', 'Data', 'Script', 'Grants', 'Used By', 'Uses');
   DataRows = 100;
 
 { A one-column result holding a note, for a page with nothing to show. }
@@ -500,7 +500,7 @@ begin
   FReveal.Parent := FBar;
   if SameText(ALayout, 'Amphibian') then
   begin
-    FReveal.Caption := 'Show in Schema Browser';
+    FReveal.Caption := 'Show in Object Browser';
   end
   else if SameText(ALayout, 'Seattle') then
   begin
@@ -648,17 +648,20 @@ begin
     Add(dwData);
     Add(dwScript);
     Add(dwGrants);
+    Add(dwUses);
     Add(dwUsedBy);
   end
   else if AObj.Ref.Kind = 'Package' then
   begin
     Add(dwScript);
     Add(dwGrants);
+    Add(dwUses);
     Add(dwUsedBy);
   end
   else
   begin
     Add(dwArguments);
+    Add(dwUses);
     Add(dwScript);
     Add(dwGrants);
     Add(dwUsedBy);
@@ -823,26 +826,324 @@ begin
   SelectObject(NextIdx);
 end;
 
+{ ------------------------------------------------------ the + search box }
+
+type
+  { Names show as you type (each one containing the text, from the
+    connection's own search); Enter or a double-click takes the highlighted
+    one. A name typed in full and not in the list (a synonym, say) is looked
+    up as typed. }
+  TpgnObjectPicker = class(TForm)
+  public
+    Adapter: TpgnAdapter;
+    Edit: TEdit;
+    Hits: TpgnResultGrid;
+    Status: TLabel;
+    Timer: TTimer;
+    Found: TpgnObjectRefs;
+    Picked: Integer;            // the row taken, -1 for the typed name
+    procedure EditChange(Sender: TObject);
+    procedure EditKeyDown(Sender: TObject; var Key: Word; Shift: TShiftState);
+    procedure HitsKeyDown(Sender: TObject; var Key: Word; Shift: TShiftState);
+    procedure HitsDblClick(Sender: TObject);
+    procedure TimerTick(Sender: TObject);
+    procedure OKClick(Sender: TObject);
+  end;
+
+procedure TpgnObjectPicker.EditChange(Sender: TObject);
+begin
+  Timer.Enabled := False;
+  Timer.Enabled := True;
+end;
+
+procedure TpgnObjectPicker.TimerTick(Sender: TObject);
+var
+  T, Where: string;
+  R: TpgnResultSet;
+  I: Integer;
+begin
+  Timer.Enabled := False;
+  T := Trim(Edit.Text);
+  if Pos('.', T) > 0 then
+  begin
+    T := Copy(T, LastDelimiter('.', T) + 1, MaxInt);
+  end;
+  T := Unquoted(T);
+  Found := nil;
+  if Length(T) >= 2 then
+  begin
+    Screen.Cursor := crHourGlass;
+    try
+      try
+        Found := Adapter.SearchObjects(T, 200);
+      except
+        on E: Exception do
+        begin
+          Found := nil;
+          Status.Caption := 'Could not search: ' + E.Message;
+        end;
+      end;
+    finally
+      Screen.Cursor := crDefault;
+    end;
+  end;
+  R := TpgnResultSet.Create;
+  SetLength(R.Columns, 3);
+  R.Columns[0] := 'Name';
+  R.Columns[1] := 'Schema';
+  R.Columns[2] := 'Type';
+  SetLength(R.Rows, Length(Found));
+  for I := 0 to High(Found) do
+  begin
+    Where := Found[I].Schema;
+    if Where = '' then
+    begin
+      Where := Found[I].Database;
+    end;
+    SetLength(R.Rows[I].Values, 3);
+    SetLength(R.Rows[I].Nulls, 3);
+    R.Rows[I].Values[0] := Found[I].Name;
+    R.Rows[I].Values[1] := Where;
+    R.Rows[I].Values[2] := Found[I].Kind;
+  end;
+  R.ReturnsRows := True;
+  Hits.ShowData(R);
+  if Length(T) < 2 then
+  begin
+    Status.Caption := 'Type two or more letters of the name.';
+  end
+  else if Length(Found) = 0 then
+  begin
+    Status.Caption := 'Nothing found. Enter looks the name up as typed (a synonym works too).';
+  end
+  else if Length(Found) >= 200 then
+  begin
+    Status.Caption := 'The first 200 names. Type more to narrow them.';
+  end
+  else
+  begin
+    Status.Caption := FormatFloat('#,##0', Length(Found)) + ' found. Down to pick, Enter to add.';
+  end;
+end;
+
+procedure TpgnObjectPicker.EditKeyDown(Sender: TObject; var Key: Word; Shift: TShiftState);
+begin
+  if (Key = VK_DOWN) and (Length(Found) > 0) and Hits.CanFocus then
+  begin
+    Hits.SetFocus;
+    Hits.Row := 1;
+    Key := 0;
+  end
+  else if Key = VK_RETURN then
+  begin
+    OKClick(nil);
+    Key := 0;
+  end;
+end;
+
+procedure TpgnObjectPicker.HitsKeyDown(Sender: TObject; var Key: Word; Shift: TShiftState);
+begin
+  if Key = VK_RETURN then
+  begin
+    HitsDblClick(nil);
+    Key := 0;
+  end
+  else if (Key = VK_UP) and (Hits.Row <= 1) and Edit.CanFocus then
+  begin
+    Edit.SetFocus;
+    Key := 0;
+  end;
+end;
+
+procedure TpgnObjectPicker.HitsDblClick(Sender: TObject);
+begin
+  if (Hits.Row >= 1) and (Hits.Row <= Length(Found)) then
+  begin
+    Picked := Hits.Row - 1;
+    ModalResult := mrOK;
+  end;
+end;
+
+{ OK (or Enter in the box): the search runs now if it hasn't; a name that
+  matches one hit exactly takes it, otherwise the typed name is looked up. }
+procedure TpgnObjectPicker.OKClick(Sender: TObject);
+var
+  I, Match: Integer;
+  T: string;
+begin
+  if Trim(Edit.Text) = '' then
+  begin
+    Exit;
+  end;
+  if Timer.Enabled then
+  begin
+    TimerTick(nil);
+  end;
+  T := Unquoted(Trim(Edit.Text));
+  Match := -1;
+  for I := 0 to High(Found) do
+  begin
+    if SameText(Found[I].Name, T) then
+    begin
+      if Match >= 0 then
+      begin
+        Match := -1;    // the same name in two schemas: the lookup decides
+        Break;
+      end;
+      Match := I;
+    end;
+  end;
+  if (Match < 0) and (Length(Found) = 1) then
+  begin
+    Match := 0;
+  end;
+  Picked := Match;
+  ModalResult := mrOK;
+end;
+
+{ 0: cancelled; 1: look up AText; 2: ARef was picked from the list. }
+function PickObject(AOwner: TCustomForm; AAdapter: TpgnAdapter; const AConnName: string;
+  out AText: string; out ARef: TpgnObjectRef): Integer;
+var
+  F: TpgnObjectPicker;
+  L: TLabel;
+  BOK, BCancel: TButton;
+  Bottom: TPanel;
+  M: Integer;
+begin
+  Result := 0;
+  AText := '';
+  ARef.Database := '';
+  ARef.Schema := '';
+  ARef.Name := '';
+  ARef.Kind := '';
+  F := TpgnObjectPicker.CreateNew(AOwner);
+  try
+    F.Adapter := AAdapter;
+    F.Picked := -1;
+    F.Caption := 'Describe: add an object';
+    F.BorderStyle := bsSizeable;
+    F.Position := poOwnerFormCenter;
+    M := F.Scale96ToScreen(10);
+    F.Width := F.Scale96ToScreen(560);
+    F.Height := F.Scale96ToScreen(440);
+    F.KeyPreview := False;
+
+    L := TLabel.Create(F);
+    L.Parent := F;
+    L.Align := alTop;
+    L.BorderSpacing.Around := M;
+    L.Caption := 'Table, view, procedure or package on ' + AConnName + ' (part of the name finds it):';
+
+    F.Edit := TEdit.Create(F);
+    F.Edit.Parent := F;
+    F.Edit.Align := alTop;
+    F.Edit.Top := L.Top + L.Height + 1;
+    F.Edit.BorderSpacing.Left := M;
+    F.Edit.BorderSpacing.Right := M;
+    F.Edit.OnChange := @F.EditChange;
+    F.Edit.OnKeyDown := @F.EditKeyDown;
+
+    Bottom := TPanel.Create(F);
+    Bottom.Parent := F;
+    Bottom.Align := alBottom;
+    Bottom.BevelOuter := bvNone;
+    Bottom.Caption := '';
+    Bottom.Height := F.Scale96ToScreen(44);
+
+    BCancel := TButton.Create(F);
+    BCancel.Parent := Bottom;
+    BCancel.Caption := 'Cancel';
+    BCancel.ModalResult := mrCancel;
+    BCancel.Cancel := True;
+    BCancel.Anchors := [akRight, akTop];
+    BCancel.SetBounds(Bottom.ClientWidth - F.Scale96ToScreen(96) - M, F.Scale96ToScreen(8),
+      F.Scale96ToScreen(96), F.Scale96ToScreen(28));
+
+    BOK := TButton.Create(F);
+    BOK.Parent := Bottom;
+    BOK.Caption := 'Add';
+    BOK.Default := True;
+    BOK.OnClick := @F.OKClick;
+    BOK.Anchors := [akRight, akTop];
+    BOK.SetBounds(BCancel.Left - F.Scale96ToScreen(96) - F.Scale96ToScreen(8), F.Scale96ToScreen(8),
+      F.Scale96ToScreen(96), F.Scale96ToScreen(28));
+
+    F.Status := TLabel.Create(F);
+    F.Status.Parent := F;
+    F.Status.Align := alBottom;
+    F.Status.BorderSpacing.Left := M;
+    F.Status.BorderSpacing.Top := F.Scale96ToScreen(4);
+    F.Status.Font.Color := clPgnMuted;
+    F.Status.Caption := 'Type two or more letters of the name.';
+    F.Status.Top := Bottom.Top - 1;   // above the buttons
+
+    F.Hits := TpgnResultGrid.Create(F);
+    F.Hits.Parent := F;
+    F.Hits.Align := alClient;
+    F.Hits.BorderSpacing.Around := M;
+    F.Hits.Options := F.Hits.Options + [goRowSelect];
+    F.Hits.OnDblClick := @F.HitsDblClick;
+    F.Hits.OnKeyDown := @F.HitsKeyDown;
+
+    F.Timer := TTimer.Create(F);
+    F.Timer.Enabled := False;
+    F.Timer.Interval := 300;
+    F.Timer.OnTimer := @F.TimerTick;
+
+    F.ActiveControl := F.Edit;
+    if F.ShowModal <> mrOK then
+    begin
+      Exit;
+    end;
+    AText := Trim(F.Edit.Text);
+    if (F.Picked >= 0) and (F.Picked <= High(F.Found)) then
+    begin
+      ARef := F.Found[F.Picked];
+      Result := 2;
+    end
+    else if AText <> '' then
+    begin
+      Result := 1;
+    end;
+  finally
+    F.Free;
+  end;
+end;
+
 { + : a name typed in, looked up on the shown object's connection. }
 procedure TpgnDescribeWindow.ObjTabAdd(Sender: TObject);
 var
   ObjName, Via: string;
   Ref: TpgnObjectRef;
   Found: Boolean;
+  A: TpgnAdapter;
 begin
   if (FCurrent = nil) or not Assigned(FOnResolve) then
   begin
     Exit;
   end;
-  ObjName := '';
-  if not InputQuery('Describe', 'Table, view, procedure or package (a synonym works too):', ObjName) then
+  A := nil;
+  if Assigned(FOnAdapter) then
   begin
+    A := FOnAdapter(FCurrent.ConnId, FCurrent.Ref.Database);
+  end;
+  if A = nil then
+  begin
+    MessageDlg('Describe', FCurrent.ConnName + ' is closed. Connect it again first.', mtInformation,
+      [mbOK], 0);
     Exit;
   end;
-  ObjName := Trim(ObjName);
-  if ObjName = '' then
-  begin
-    Exit;
+  case PickObject(Self, A, FCurrent.ConnName, ObjName, Ref) of
+    0:
+      begin
+        Exit;
+      end;
+    2:
+      begin
+        AddObject(FCurrent.ConnId, FCurrent.ConnName, Ref, '', FCurrent.Dialect);
+        Exit;
+      end;
   end;
   Screen.Cursor := crHourGlass;
   try
@@ -981,6 +1282,11 @@ begin
         begin
           Txt := A.ObjectScript(C, O.Ref.Name, O.Ref.Kind);
         end
+        else if Pos('.', O.Ref.Name) > 0 then
+        begin
+          // a package member: its package
+          Txt := A.ObjectScript(C, Copy(O.Ref.Name, 1, Pos('.', O.Ref.Name) - 1), 'Package');
+        end
         else
         begin
           if O.Ref.Kind = 'Procedure' then
@@ -1030,6 +1336,10 @@ begin
           begin
             R := A.DescribeParameters(C, O.Ref.Name);
           end;
+        dwUses:
+          begin
+            R := A.DescribeUses(C, O.Ref.Name);
+          end;
         dwData:
           begin
             Q := A.SelectTopSQL(A.QuoteIdent(C) + '.' + A.QuoteIdent(O.Ref.Name), DataRows);
@@ -1037,7 +1347,12 @@ begin
           end;
         dwGrants:
           begin
-            if O.Ref.Kind = 'Table' then
+            if Pos('.', O.Ref.Name) > 0 then
+            begin
+              // a package member: grants are on its package
+              R := A.DescribeGrants(C, Copy(O.Ref.Name, 1, Pos('.', O.Ref.Name) - 1), 'PACKAGE');
+            end
+            else if O.Ref.Kind = 'Table' then
             begin
               R := A.DescribeGrants(C, O.Ref.Name, 'TABLE');
             end
@@ -1060,7 +1375,14 @@ begin
           end;
       else
         begin
-          R := A.DescribeUsedBy(C, O.Ref.Name);
+          if Pos('.', O.Ref.Name) > 0 then
+          begin
+            R := A.DescribeUsedBy(C, Copy(O.Ref.Name, 1, Pos('.', O.Ref.Name) - 1));
+          end
+          else
+          begin
+            R := A.DescribeUsedBy(C, O.Ref.Name);
+          end;
         end;
       end;
       if R = nil then
@@ -1073,6 +1395,11 @@ begin
         begin
           R.Free;
           R := Note(PageCaptions[APage], 'Nothing that Pagona can see depends on it.');
+        end
+        else if APage = dwUses then
+        begin
+          R.Free;
+          R := Note(PageCaptions[APage], 'It uses nothing your login can see.');
         end
         else if APage in [dwIndexes, dwConstraints, dwTriggers, dwGrants] then
         begin

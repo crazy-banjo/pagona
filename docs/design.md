@@ -231,7 +231,7 @@ RLMORROW@DEV9 - Pagona - [Editor (Query 1)]
 File Edit Search Session Editor Database View Window
 [main toolbar: icons]
 [TEST RLMORROW@DEV9] [PROD RLMORROW@PROD]          <- session bar
-[Editor] [Schema Browser (RLMORROW@DEV9)] [Sessions] <- window bar
+[Editor] [Object Browser (RLMORROW@DEV9)] [Sessions] <- window bar
 [editor toolbar: icons ............ Session [ ] Database [ ] Schema [ ]]
 [Query 1 x] [Procedure X x] [+]                     <- editor tabs
 editor
@@ -246,9 +246,9 @@ status bar
   that a restart there is fine).
 - The tab's environment band is replaced by the pickers in the editor
   toolbar; the session bar and status bar carry the environment as text.
-- Database menu: Schema Browser; Monitor > Session Browser, Locks;
+- Database menu: Object Browser (Toad: Schema Browser); Monitor > Session Browser, Locks;
   Security > Users and Roles, Who Can Do What; Pagona DBA Log.
-- Schema Browser: object types as buttons (rare ones under More), a filter
+- Object Browser: object types as buttons (rare ones under More), a filter
   (SPR% = starts with), the list, Details tabs on the right; double-click
   opens code; right-click is the Explorer's menu for that object.
 - Session > New Connection: Toad's login window, the saved connections in a
@@ -382,7 +382,7 @@ colors), for the name under the cursor.
   (pg_depend) and foreign keys; SQL Server sys.sql_expression_dependencies
   and foreign keys; MySQL views, foreign keys and routines whose text
   mentions the name.
-- "Show in Schema Browser" (Amphibian), "Show in Object Explorer"
+- "Show in Object Browser" (Amphibian), "Show in Object Explorer"
   (Seattle), "Show in Explorer" (Plume) selects the object there.
 - One window, several objects (Randy, 2026-11-02): F4 / Alt+F1 adds the
   object as a tab in the open window (or brings its tab forward); + asks

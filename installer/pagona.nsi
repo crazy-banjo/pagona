@@ -4,6 +4,7 @@
 ;
 ; The Windows installer (NSIS 3). Built by the release workflow:
 ;   makensis /DVERSION=0.1.0 installer\pagona.nsi
+; or dropped on MakeNSISW (the version is then read from src\pgntypes.pas)
 ; from the repository's top folder, after the Release build has made
 ; bin\pagona.exe. Installs for all users into Program Files (needs an
 ; administrator). The database client libraries are optional and not
@@ -12,8 +13,14 @@
 Unicode true
 SetCompressor /SOLID lzma
 
+; No /DVERSION (dropped on MakeNSISW, say): read it from Pagona's own source,
+; so the installer always matches the program. makensis works from this
+; script's folder, so the path is relative to it.
 !ifndef VERSION
-  !define VERSION "0.0.0"
+  !searchparse /noerrors /file "..\src\pgntypes.pas" "  PagonaVersion = '" VERSION "';"
+!endif
+!ifndef VERSION
+  !error "Couldn't read PagonaVersion from src\pgntypes.pas: build with /DVERSION=x.y.z"
 !endif
 !define APPNAME "Pagona"
 !define PUBLISHER "Randy Morrow"

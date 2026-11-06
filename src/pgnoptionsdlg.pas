@@ -24,19 +24,49 @@ function EditOptions(AOwner: TComponent; ASettings: TpgnSettings): Boolean;
 
 implementation
 
+type
+  TBrowseHolder = class
+    Edit: TEdit;
+    procedure Click(Sender: TObject);
+  end;
+
+procedure TBrowseHolder.Click(Sender: TObject);
+var
+  D: TSelectDirectoryDialog;
+begin
+  D := TSelectDirectoryDialog.Create(nil);
+  try
+    D.Title := 'Shared format profiles folder';
+    D.InitialDir := Trim(Edit.Text);
+    if D.Execute then
+    begin
+      Edit.Text := D.FileName;
+    end;
+  finally
+    D.Free;
+  end;
+end;
+
 function EditOptions(AOwner: TComponent; ASettings: TpgnSettings): Boolean;
 var
+  Browse: TBrowseHolder;
+  LShared, LSharedHint: TLabel;
+  EShared: TEdit;
+  BBrowse: TButton;
   F: TForm;
   Y, I, Limit: Integer;
   ERowLimit: TLabeledEdit;
   LKeymap, LHint: TLabel;
   CKeymap: TComboBox;
-  CConfirm, CLogAll, CAuto, CAutoSea, CDdl: TCheckBox;
+  CConfirm, CLogAll, CAuto, CAutoSea, CDdl, CReopen, CComplete: TCheckBox;
+  LPgErr: TLabel;
+  CPgErr: TComboBox;
   BOK, BCancel: TButton;
 begin
   Result := False;
   F := TForm.CreateNew(AOwner);
   SmoothFont(F.Font);
+  Browse := TBrowseHolder.Create;
   try
     F.Caption := 'Options';
     F.BorderStyle := bsDialog;
@@ -99,7 +129,51 @@ begin
     CAutoSea.Left := 16;
     CAutoSea.Top := Y;
     CAutoSea.Checked := ASettings.AutoCommitSeattle;
+    Inc(Y, 28);
+
+    CReopen := TCheckBox.Create(F);
+    CReopen.Parent := F;
+    CReopen.Caption := 'Reopen last session''s tabs (never-saved tabs keep their text)';
+    CReopen.Left := 16;
+    CReopen.Top := Y;
+    CReopen.Checked := ASettings.ReopenTabs;
+    Inc(Y, 28);
+
+    CComplete := TCheckBox.Create(F);
+    CComplete.Parent := F;
+    CComplete.Caption := 'Code completion: columns after a dot (s.), and Edit > Complete Code (Ctrl+Space)';
+    CComplete.Left := 16;
+    CComplete.Top := Y;
+    CComplete.Checked := ASettings.CodeCompletion;
     Inc(Y, 34);
+
+    LPgErr := TLabel.Create(F);
+    LPgErr.Parent := F;
+    LPgErr.Caption := 'PostgreSQL, on error roll back just the statement (as psql''s ON_ERROR_ROLLBACK)';
+    LPgErr.Left := 16;
+    LPgErr.Top := Y;
+    CPgErr := TComboBox.Create(F);
+    CPgErr.Parent := F;
+    CPgErr.Style := csDropDownList;
+    CPgErr.Left := 16;
+    CPgErr.Top := Y + 18;
+    CPgErr.Width := 330;
+    CPgErr.Items.Add('Off: an error ends the transaction (PostgreSQL''s way)');
+    CPgErr.Items.Add('Interactive: Run Statement only, not scripts');
+    CPgErr.Items.Add('On: every statement');
+    if SameText(ASettings.PgErrorRollback, 'interactive') then
+    begin
+      CPgErr.ItemIndex := 1;
+    end
+    else if SameText(ASettings.PgErrorRollback, 'on') then
+    begin
+      CPgErr.ItemIndex := 2;
+    end
+    else
+    begin
+      CPgErr.ItemIndex := 0;
+    end;
+    Inc(Y, 58);
 
     LKeymap := TLabel.Create(F);
     LKeymap.Parent := F;
@@ -123,6 +197,32 @@ begin
       end;
     end;
     Inc(Y, 56);
+
+    LShared := TLabel.Create(F);
+    LShared.Parent := F;
+    LShared.Caption := 'Shared format profiles folder (optional)';
+    LShared.Left := 16;
+    LShared.Top := Y;
+    EShared := TEdit.Create(F);
+    EShared.Parent := F;
+    EShared.Left := 16;
+    EShared.Top := Y + 18;
+    EShared.Width := F.ClientWidth - 32 - 100;
+    EShared.Text := ASettings.SharedFormatFolder;
+    Browse.Edit := EShared;
+    BBrowse := TButton.Create(F);
+    BBrowse.Parent := F;
+    BBrowse.Caption := 'Browse...';
+    BBrowse.Left := EShared.Left + EShared.Width + 8;
+    BBrowse.Top := Y + 17;
+    BBrowse.Width := 92;
+    BBrowse.OnClick := @Browse.Click;
+    LSharedHint := TLabel.Create(F);
+    LSharedHint.Parent := F;
+    LSharedHint.Caption := 'A team''s .pagona-format files; shown in Format SQL as (shared).';
+    LSharedHint.Left := 16;
+    LSharedHint.Top := Y + 50;
+    Inc(Y, 82);
 
     BOK := TButton.Create(F);
     BOK.Parent := F;
@@ -161,6 +261,23 @@ begin
       ASettings.LogEveryStatement := CLogAll.Checked;
       ASettings.AutoCommitNewTabs := CAuto.Checked;
       ASettings.AutoCommitSeattle := CAutoSea.Checked;
+      ASettings.ReopenTabs := CReopen.Checked;
+      ASettings.CodeCompletion := CComplete.Checked;
+      case CPgErr.ItemIndex of
+        1:
+          begin
+            ASettings.PgErrorRollback := 'interactive';
+          end;
+        2:
+          begin
+            ASettings.PgErrorRollback := 'on';
+          end;
+      else
+        begin
+          ASettings.PgErrorRollback := 'off';
+        end;
+      end;
+      ASettings.SharedFormatFolder := Trim(EShared.Text);
       if CKeymap.ItemIndex = 0 then
       begin
         ASettings.Keymap := KeymapMatchLayout;
@@ -174,6 +291,7 @@ begin
     end;
   finally
     F.Free;
+    Browse.Free;
   end;
 end;
 

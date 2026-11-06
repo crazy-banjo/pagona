@@ -1040,6 +1040,82 @@ begin
   SetLength(Result, Count);
 end;
 
+{ The statement a comment line belongs to: the one it sits inside (after
+  the statement's first code), or the one right below it with no blank line
+  between. Returns a position in that statement's code, or 0 (a comment on
+  its own, between blank lines, belongs to nothing). }
+function CommentOwner(const AText: string; ACaretPos: Integer; ADialect: TpgnDialect): Integer;
+var
+  Spans: TpgnStatementSpans;
+  Mask: TpgnBoolArray;
+  I, K, FirstCode, LineEnd: Integer;
+  Blank: Boolean;
+begin
+  Result := 0;
+  Spans := SplitStatements(AText, ADialect);
+  Mask := CommentMask(AText, ADialect);
+  for I := 0 to High(Spans) do
+  begin
+    if (ACaretPos < Spans[I].StartPos) or (ACaretPos > Spans[I].DelimEnd) then
+    begin
+      Continue;
+    end;
+    // the statement's first code (not comment, not blank)
+    FirstCode := 0;
+    for K := Spans[I].StartPos to Spans[I].EndPos do
+    begin
+      if not (AText[K] in [' ', #9, #10, #13]) and not Mask[K - 1] then
+      begin
+        FirstCode := K;
+        Break;
+      end;
+    end;
+    if FirstCode = 0 then
+    begin
+      Exit;   // only comments
+    end;
+    if ACaretPos >= FirstCode then
+    begin
+      Result := FirstCode;   // inside the statement
+      Exit;
+    end;
+    // above it: no blank line between this comment line and the code
+    LineEnd := ACaretPos;
+    while (LineEnd <= Length(AText)) and not (AText[LineEnd] in [#10, #13]) do
+    begin
+      Inc(LineEnd);
+    end;
+    K := LineEnd;
+    while K < FirstCode do
+    begin
+      // a line break followed by only blanks up to the next line break
+      if AText[K] = #10 then
+      begin
+        Blank := True;
+        Inc(K);
+        while (K < FirstCode) and (AText[K] <> #10) do
+        begin
+          if not (AText[K] in [' ', #9, #13]) then
+          begin
+            Blank := False;
+          end;
+          Inc(K);
+        end;
+        if Blank and (K < FirstCode) then
+        begin
+          Exit;   // a blank line: the comment stands alone
+        end;
+      end
+      else
+      begin
+        Inc(K);
+      end;
+    end;
+    Result := FirstCode;
+    Exit;
+  end;
+end;
+
 function FirstNonBlank(const AText: string; const ASpan: TpgnStatementSpan): Integer;
 var
   I: Integer;
@@ -1068,11 +1144,15 @@ begin
   Result := False;
   AStart := 0;
   AEnd := 0;
-  // a commented-out line is never run, even though the statement it
-  // belongs to (the one after it) would be
+  // on a comment line: the statement the comment belongs to (see
+  // CommentOwner), or nothing
   if CaretOnCommentLine(AText, ACaretPos, ADialect) then
   begin
-    Exit;
+    ACaretPos := CommentOwner(AText, ACaretPos, ADialect);
+    if ACaretPos = 0 then
+    begin
+      Exit;
+    end;
   end;
   Spans := SplitStatements(AText, ADialect);
   if Length(Spans) = 0 then

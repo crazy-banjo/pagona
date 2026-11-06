@@ -30,12 +30,15 @@ interface
 
 uses
   Classes, SysUtils, Forms, Controls, Graphics, Dialogs, StdCtrls, ExtCtrls,
-  ComCtrls, LazUTF8, Grids, Math,
-  SynEdit, SynHighlighterSQL, SynEditMiscClasses, SynEditTypes,
+  ComCtrls, LazUTF8, Grids, Math, pgnFindCombo,
+  SynEdit, SynHighlighterSQL, SynEditMiscClasses, SynEditTypes, SynEditMarkupHighAll, SynEditMarkupBracket,
   pgnTypes, pgnAdapter, pgnConnections, pgnSettings, pgnQueryThread, pgnUsersScreen, pgnWhoCanScreen,
-  pgnSqlSplit, pgnColors, pgnTheme, pgnResultGrid, pgnDbaLog, pgnKeymap, pgnExport;
+  pgnSqlSplit, pgnColors, pgnTheme, pgnResultGrid, pgnDbaLog, pgnKeymap, pgnExport, pgnErrorPos, StrUtils,
+  SynCompletion, SynEditKeyCmds, SynEditHighlighter, LCLType, pgnCompletion;
 
 type
+  TpgnZoomEvent = procedure(Sender: TObject; ADirection: Integer) of object;
+
   { A DBA screen a tab can show instead of the editor. }
   TpgnDbaScreen = (dsNone, dsSessions, dsLocks, dsUsers, dsWhoCan);
 
@@ -73,6 +76,7 @@ type
     FThread: TpgnQueryThread;
     FCurrentDb: string;
     FStatusText: string;
+    FRowStatusText: string;      // the last run's row count, for when a grid's sort or filter is cleared
     FTitle: string;
     FFileName: string;
     FWasModified: Boolean;
@@ -124,10 +128,10 @@ type
     FConnLabel: TLabel;
     FDbLabel: TLabel;
     FBandLine: TPanel;
-    FConnCombo: TComboBox;
-    FDbCombo: TComboBox;
+    FConnCombo: TpgnFindCombo;
+    FDbCombo: TpgnFindCombo;
     FSchemaLabel: TLabel;     // PostgreSQL: where unqualified names are found
-    FSchemaCombo: TComboBox;
+    FSchemaCombo: TpgnFindCombo;
     FSchemaWanted: Boolean;
     FAutoCommitCheck: TCheckBox;
     FBand: TPanel;
@@ -176,8 +180,25 @@ type
     FMessagesPanel: TPanel;
     FMessages: TSynEdit;         // read-only; lets each line have its own style
     FMsgKinds: TFPList;          // TpgnMessageKind per line of FMessages
+    FMsgTargets: TFPList;        // per line of FMessages: editor line shl 16 + column, 0 = none
+    // code completion: what the list can show (unfiltered), the case to
+    // show it in, and what's been looked up (columns by table, a schema's
+    // tables, the schema names)
+    FCompletion: TSynCompletion;
+    FCompTimer: TTimer;          // the list comes up a moment after the dot
+    FCompAll: TStringList;
+    FCompTyped: string;
+    FCompCache: TStringList;
+    FCompContainers: TStringList;
+    FInteractiveRun: Boolean;    // Run Statement (not a script): for PostgreSQL's On error, roll back
+    FRunOrigins: array of Integer;          // where each statement run starts in the editor (0 = unknown)
+    FOriginStatements: TpgnStringArray;     // the statements those origins are for
+    FLostError: string;          // the error that said the connection was gone
+    FRestored: Boolean;          // text from last session, never saved: unsaved even after Undo
+    FLostStatements: TpgnStringArray;   // what to run again after reconnecting
 
     FOnStateChanged: TNotifyEvent;
+    FOnZoom: TpgnZoomEvent;
     FOnActivate: TNotifyEvent;
     FOnSchemaChanged: TpgnSchemaChangedEvent;
     FOnCaretMoved: TNotifyEvent;
@@ -224,9 +245,26 @@ type
     procedure DbComboChange(Sender: TObject);
     procedure AutoCommitClick(Sender: TObject);
     procedure EditorChange(Sender: TObject);
+    procedure EditorCommandDone(Sender: TObject; var Command: TSynEditorCommand; var AChar: TUTF8Char;
+      Data: Pointer);
+    procedure CompTimerTick(Sender: TObject);
+    procedure CompletionExecute(Sender: TObject);
+    procedure CompletionSearch(var APosition: Integer);
+    procedure CompletionKeyPress(Sender: TObject; var UTF8Key: TUTF8Char);
+    procedure CompletionTab(Sender: TObject);
+    procedure FilterCompletion;
+    function CanLookUp: Boolean;
+    function CachedList(const AKey: string; out AList: TStringList): Boolean;
+    function KeepList(const AKey: string; AList: TStringList): TStringList;
+    function TableColumns(const ATable: string): TStringList;
+    function ContainerObjects(const AName: string): TStringList;
+    procedure ClearCompletionCache;
     procedure EditorEnter(Sender: TObject);
     procedure EditorMouseDown(Sender: TObject; Button: TMouseButton; Shift: TShiftState; X, Y: Integer);
+    procedure EditorMouseWheel(Sender: TObject; Shift: TShiftState; WheelDelta: Integer;
+      MousePos: TPoint; var Handled: Boolean);
     procedure QueryDone(Sender: TObject);
+    procedure AskReconnect(AData: PtrInt);
     function AddResultGrid: TpgnResultGrid;
     procedure ShowResults(AList: TFPList);
     procedure PagesChange(Sender: TObject);
@@ -303,6 +341,12 @@ type
     procedure InsertText(const AText: string; AOwnLine: Boolean);
     procedure SetText(const AText: string);
     procedure LoadFromFile(const AFileName: string);
+    { The editor's and the messages' text size (View > Zoom). }
+    procedure SetEditorFontSize(ASize: Integer);
+    { Puts the cursor at the start of a line (1-based) and brings it into view. }
+    procedure GoToLine(ALine: Integer);
+    { A tab from last session that was never saved: its text, still unsaved. }
+    procedure RestoreText(const AText: string);
     procedure SaveToFile(const AFileName: string);
     function IsModified: Boolean;
     function IsEmpty: Boolean;
@@ -311,7 +355,19 @@ type
     procedure BlockComment;
     procedure ChangeCase(AUpper: Boolean);
     procedure FocusEditor;
+    { Code completion at the cursor: after a dot, the columns of the table
+      (or alias) before it, or a schema's tables; otherwise the names in
+      the editor and the database's tables. AAfterDot: typed, not asked
+      for (shows nothing when there's nothing to offer). }
+    procedure ShowCompletion(AAfterDot: Boolean);
     procedure Log(const AText: string);
+    { A message that double-clicking takes the editor to (ALine, ACol; 0 = none). }
+    procedure LogAt(const AText: string; ALine, ACol: Integer);
+    procedure MessagesDblClick(Sender: TObject);
+    procedure SetOrigins(const AStatements: TpgnStringArray; const ABase: string; ABaseOffset, AFrom: Integer);
+    procedure AskRollbackAborted(AData: PtrInt);
+    procedure LogError(T: TpgnQueryThread);
+    procedure GridViewChanged(Sender: TObject);
     { A short message in the tab's status (and the status bar). }
     procedure Notice(const AText: string);
     procedure ApplyTheme(const ATheme: string);
@@ -324,7 +380,7 @@ type
 
     { The band's pickers (0 connection, 1 database, 2 schema), for a
       toolbar that shows them in the band's place (Amphibian). }
-    function BandCombo(AWhich: Integer): TComboBox;
+    function BandCombo(AWhich: Integer): TpgnFindCombo;
     procedure PickInBand(AWhich, AIndex: Integer);
     function SchemaWanted: Boolean;
     { Pending statements (auto-commit off): PendingCount of them. }
@@ -349,6 +405,8 @@ type
     property FileName: string read FFileName;
     property Editor: TSynEdit read FEditor;
     property OnStateChanged: TNotifyEvent read FOnStateChanged write FOnStateChanged;
+    { Ctrl+wheel in the editor: +1 bigger, -1 smaller. }
+    property OnZoom: TpgnZoomEvent read FOnZoom write FOnZoom;
     property OnActivate: TNotifyEvent read FOnActivate write FOnActivate;
     property OnSchemaChanged: TpgnSchemaChangedEvent read FOnSchemaChanged write FOnSchemaChanged;
     property OnCaretMoved: TNotifyEvent read FOnCaretMoved write FOnCaretMoved;
@@ -432,6 +490,10 @@ begin
   FreeAndNil(FResultGrids);   // the grids themselves are owned controls
   inherited Destroy;
   FreeAndNil(FMsgKinds);
+  FreeAndNil(FMsgTargets);
+  FreeAndNil(FCompAll);
+  FreeAndNil(FCompCache);
+  FreeAndNil(FCompContainers);
 end;
 
 procedure TpgnQueryTab.AddHeaderControl(AControl: TControl);
@@ -502,6 +564,7 @@ procedure TpgnQueryTab.BuildUI;
 var
   Splitter: TSplitter;
   L: TLabel;
+  WordMark: TSynEditMarkupHighlightAllCaret;
 begin
   FNextLeft := 0;
   FAmph := False;   // built as Plume; ApplyLayout rearranges for Amphibian or Seattle
@@ -534,7 +597,7 @@ begin
   FConnLabel.ParentFont := False;
   AddHeaderControl(FConnLabel);
 
-  FConnCombo := TComboBox.Create(Self);
+  FConnCombo := TpgnFindCombo.Create(Self);
   FConnCombo.Style := csDropDownList;
   FConnCombo.AutoSize := False;
   FConnCombo.Width := 260;
@@ -547,7 +610,7 @@ begin
   FDbLabel.ParentFont := False;
   AddHeaderControl(FDbLabel);
 
-  FDbCombo := TComboBox.Create(Self);
+  FDbCombo := TpgnFindCombo.Create(Self);
   FDbCombo.Style := csDropDownList;
   FDbCombo.AutoSize := False;   // the band sets the width (GTK3 would fit it to the items)
   FDbCombo.Width := 200;
@@ -560,7 +623,7 @@ begin
   FSchemaLabel.ParentFont := False;
   AddHeaderControl(FSchemaLabel);
 
-  FSchemaCombo := TComboBox.Create(Self);
+  FSchemaCombo := TpgnFindCombo.Create(Self);
   FSchemaCombo.Style := csDropDownList;
   FSchemaCombo.AutoSize := False;
   FSchemaCombo.Width := 150;
@@ -693,7 +756,11 @@ begin
   {$ELSE}
   FEditor.Font.Name := 'Monospace';
   {$ENDIF}
-  FEditor.Font.Size := 10;
+  FEditor.Font.Size := DefaultEditorFontSize;
+  if FSettings <> nil then
+  begin
+    FEditor.Font.Size := FSettings.EditorFontSize;
+  end;
   SmoothFont(FEditor.Font);
   FEditor.Lines.Clear;   // starts empty, caret at the beginning
   FEditor.OnEnter := @EditorEnter;
@@ -707,6 +774,47 @@ begin
   // a click past the end of a line puts the cursor at the end of the text,
   // not out in empty space
   FEditor.Options := FEditor.Options - [eoScrollPastEol];
+  FEditor.OnMouseWheel := @EditorMouseWheel;
+  FEditor.OnCommandProcessed := @EditorCommandDone;
+  // code completion: the list comes up on a dot, or on the Complete Code
+  // key (the main window's, so each keymap has its own)
+  FCompAll := TStringList.Create;
+  FCompCache := TStringList.Create;
+  FCompCache.OwnsObjects := True;
+  FCompletion := TSynCompletion.Create(Self);
+  FCompletion.Editor := FEditor;
+  FCompletion.ShortCut := 0;
+  FCompletion.Width := Scale96ToScreen(320);
+  FCompletion.LinesInWindow := 12;
+  FCompletion.OnExecute := @CompletionExecute;
+  FCompletion.OnSearchPosition := @CompletionSearch;
+  FCompletion.OnUTF8KeyPress := @CompletionKeyPress;
+  FCompletion.OnKeyCompletePrefix := @CompletionTab;
+  FCompTimer := TTimer.Create(Self);
+  FCompTimer.Enabled := False;
+  FCompTimer.Interval := 150;
+  FCompTimer.OnTimer := @CompTimerTick;
+  // the bracket that matches the one at the cursor: boxed and bold, not
+  // only colored
+  FEditor.Options := FEditor.Options + [eoBracketHighlight];
+  FEditor.BracketHighlightStyle := sbhsBoth;
+  FEditor.BracketMatchColor.Background := TColor($00B0F0FF);
+  FEditor.BracketMatchColor.Foreground := clNone;
+  FEditor.BracketMatchColor.FrameColor := TColor($00007FBF);
+  FEditor.BracketMatchColor.Style := [fsBold];
+  // the word at the cursor, everywhere else it appears: boxed and shaded
+  // (SQL keywords left out, so SELECT doesn't light up the whole script)
+  WordMark := TSynEditMarkupHighlightAllCaret(FEditor.MarkupByClass[TSynEditMarkupHighlightAllCaret]);
+  if WordMark <> nil then
+  begin
+    WordMark.MarkupInfo.Background := TColor($00E6F2D9);
+    WordMark.MarkupInfo.FrameColor := TColor($0080B060);
+    WordMark.MarkupInfo.Foreground := clNone;
+    WordMark.WaitTime := 400;
+    WordMark.Trim := True;
+    WordMark.FullWord := True;
+    WordMark.IgnoreKeywords := True;
+  end;
 
   // recomputing the shaded statement waits until typing pauses
   FShadeTimer := TTimer.Create(Self);
@@ -794,6 +902,7 @@ begin
   FProgressTimer.OnTimer := @ProgressTick;
 
   FMsgKinds := TFPList.Create;
+  FMsgTargets := TFPList.Create;
   FMessages := TSynEdit.Create(Self);
   FMessages.Parent := FMessagesPanel;
   FMessages.Align := alClient;
@@ -807,6 +916,7 @@ begin
   FMessages.Color := clPgnWork;
   FMessages.Lines.Clear;
   FMessages.OnSpecialLineMarkup := @MessagesLineMarkup;
+  FMessages.OnDblClick := @MessagesDblClick;
 
   FPages.ActivePage := FTabResults;
   ApplyLayout(FSettings.Layout);
@@ -967,6 +1077,7 @@ begin
         G.Parent := FTabResults;
         G.Align := alNone;
         G.SetBounds(-6000, 0, 300, 200);
+        G.OnViewChanged := @GridViewChanged;
         FSeaGrids.Add(G);
       end;
       FSeaShown := 0;
@@ -1341,7 +1452,7 @@ begin
   end;
 end;
 
-function TpgnQueryTab.BandCombo(AWhich: Integer): TComboBox;
+function TpgnQueryTab.BandCombo(AWhich: Integer): TpgnFindCombo;
 begin
   case AWhich of
     0:
@@ -1361,7 +1472,7 @@ end;
 
 procedure TpgnQueryTab.PickInBand(AWhich, AIndex: Integer);
 var
-  C: TComboBox;
+  C: TpgnFindCombo;
 begin
   C := BandCombo(AWhich);
   if (AIndex < 0) or (AIndex >= C.Items.Count) or (C.ItemIndex = AIndex) then
@@ -1503,7 +1614,7 @@ end;
   ignoring an empty tab that was never saved. }
 function TpgnQueryTab.IsModified: Boolean;
 begin
-  Result := FEditor.Modified and ((FFileName <> '') or HasText);
+  Result := (FEditor.Modified or FRestored) and ((FFileName <> '') or HasText);
 end;
 
 function TpgnQueryTab.IsEmpty: Boolean;
@@ -1568,6 +1679,11 @@ end;
   of several lines keeps its lines in order, the later ones indented under
   the time. Errors and warnings are styled (see MessagesLineMarkup). }
 procedure TpgnQueryTab.Log(const AText: string);
+begin
+  LogAt(AText, 0, 0);
+end;
+
+procedure TpgnQueryTab.LogAt(const AText: string; ALine, ACol: Integer);
 var
   Parts: TStringList;
   I: Integer;
@@ -1602,6 +1718,14 @@ begin
         FMessages.Lines.Insert(0, Line);
       end;
       FMsgKinds.Insert(0, Pointer(PtrUInt(Ord(Kind))));
+      if ALine > 0 then
+      begin
+        FMsgTargets.Insert(0, Pointer(PtrUInt((ALine shl 16) or (Max(1, Min(ACol, $FFFF)) and $FFFF))));
+      end
+      else
+      begin
+        FMsgTargets.Insert(0, nil);
+      end;
     end;
   finally
     Parts.Free;
@@ -1609,6 +1733,86 @@ begin
   FMessages.TopLine := 1;
   FMessages.CaretXY := Point(1, 1);
   FMessages.Invalidate;
+end;
+
+{ Double-click an error: the editor goes to where it happened. }
+procedure TpgnQueryTab.MessagesDblClick(Sender: TObject);
+var
+  K: Integer;
+  V: PtrUInt;
+  L, C: Integer;
+begin
+  K := FMessages.CaretY - 1;
+  if (K < 0) or (K >= FMsgTargets.Count) or (FMsgTargets[K] = nil) then
+  begin
+    Exit;
+  end;
+  V := PtrUInt(FMsgTargets[K]);
+  L := V shr 16;
+  C := V and $FFFF;
+  if L > FEditor.Lines.Count then
+  begin
+    Exit;   // the text has changed since
+  end;
+  FEditor.CaretXY := Point(C, L);
+  FEditor.EnsureCursorPosVisible;
+  // the word there, so it's easy to see
+  FEditor.SelectWord;
+  FocusEditor;
+end;
+
+{ Where each statement starts in the editor: ABase is the text they came
+  from (the editor's, or the selection's), starting at ABaseOffset in the
+  editor; the search starts at AFrom in ABase. }
+procedure TpgnQueryTab.SetOrigins(const AStatements: TpgnStringArray; const ABase: string;
+  ABaseOffset, AFrom: Integer);
+var
+  I, P, From: Integer;
+begin
+  SetLength(FRunOrigins, Length(AStatements));
+  FOriginStatements := Copy(AStatements, 0, Length(AStatements));
+  From := Max(1, AFrom);
+  for I := 0 to High(AStatements) do
+  begin
+    P := PosEx(AStatements[I], ABase, From);
+    if P > 0 then
+    begin
+      FRunOrigins[I] := ABaseOffset + P - 1;
+      From := P + Length(AStatements[I]);
+    end
+    else
+    begin
+      FRunOrigins[I] := 0;
+    end;
+  end;
+end;
+
+{ PostgreSQL refuses everything after an error until the transaction ends:
+  offer to end it (Leave It is the default). }
+procedure TpgnQueryTab.AskRollbackAborted(AData: PtrInt);
+var
+  Msg: string;
+begin
+  if (FAdapter = nil) or (FThread <> nil) then
+  begin
+    Exit;
+  end;
+  Msg := 'An earlier error ended this transaction, and PostgreSQL refuses every statement until it''s ' +
+    'rolled back.';
+  if FPending > 0 then
+  begin
+    Msg := Msg + LineEnding + LineEnding + 'The ' + IntToStr(FPending) + ' change(s) waiting for Commit ' +
+      'will be lost when you roll back.';
+  end;
+  if QuestionDlg('Transaction aborted', Msg, mtWarning,
+    [mrYes, 'Roll Back', mrNo, 'Leave It', 'IsDefault'], 0) = mrYes then
+  begin
+    Rollback;
+  end
+  else
+  begin
+    Log('Left as it is: statements will be refused until Rollback (the toolbar, or ROLLBACK;).');
+  end;
 end;
 
 procedure TpgnQueryTab.MessagesLineMarkup(Sender: TObject; Line: Integer; var Special: Boolean;
@@ -1652,6 +1856,399 @@ end;
 { Puts the cursor in this tab's editor. Before the window is on screen,
   the editor is marked as the control to focus when it appears; a focus
   request that can't be honored is simply skipped. }
+{ --- Code completion }
+
+procedure TpgnQueryTab.EditorCommandDone(Sender: TObject; var Command: TSynEditorCommand; var AChar: TUTF8Char;
+  Data: Pointer);
+begin
+  if (Command = ecChar) and (AChar = '.') and (FSettings <> nil) and FSettings.CodeCompletion and
+    not FCompletion.IsActive and not FEditor.ReadOnly then
+  begin
+    // a moment later, once the key is done (opened during the key press,
+    // the list can take the focus without showing)
+    FCompTimer.Enabled := False;
+    FCompTimer.Enabled := True;
+  end;
+end;
+
+procedure TpgnQueryTab.CompTimerTick(Sender: TObject);
+var
+  Line, Token, Q, Prefix: string;
+  P: TPoint;
+  Dot: Integer;
+  Attri: TSynHighlighterAttributes;
+begin
+  FCompTimer.Enabled := False;
+  if FCompletion.IsActive or not FEditor.Focused or FEditor.SelAvail then
+  begin
+    Exit;
+  end;
+  P := FEditor.LogicalCaretXY;
+  Line := FEditor.LineText;
+  if P.X - 1 > Length(Line) then
+  begin
+    Exit;
+  end;
+  // still on the name after a dot, after a name (not 3. or '...' or a comment)
+  WordAtCaret(Copy(Line, 1, P.X - 1), Q, Prefix);
+  Dot := P.X - Length(Prefix) - 1;
+  if (Q = '') or (Dot < 2) or (Q[1] in ['0'..'9']) then
+  begin
+    Exit;
+  end;
+  // the highlighter takes a lone dot for the start of a number, so it's the
+  // name before the dot that's looked at
+  if FEditor.GetHighlighterAttriAtRowCol(Point(Dot - 1, P.Y), Token, Attri) and (Attri <> nil) and
+    ((Attri = FHighlighter.StringAttri) or (Attri = FHighlighter.CommentAttri) or
+    (Attri = FHighlighter.NumberAttri)) then
+  begin
+    Exit;
+  end;
+  ShowCompletion(True);
+end;
+
+procedure TpgnQueryTab.ShowCompletion(AAfterDot: Boolean);
+var
+  P: TPoint;
+  Q, Prefix: string;
+begin
+  if (FSettings <> nil) and not FSettings.CodeCompletion then
+  begin
+    if not AAfterDot then
+    begin
+      Log('Code completion is off (Options).');
+    end;
+    Exit;
+  end;
+  if FEditor.ReadOnly or not FEditor.Visible then
+  begin
+    Exit;
+  end;
+  WordAtCaret(Copy(FEditor.LineText, 1, FEditor.LogicalCaretXY.X - 1), Q, Prefix);
+  P := FEditor.ClientToScreen(Point(FEditor.CaretXPix, FEditor.CaretYPix + FEditor.LineHeight + 1));
+  // asked for with one match: it's put in; after a dot the list always shows
+  FCompletion.AutoUseSingleIdent := not AAfterDot;
+  FCompletion.Execute(Prefix, P.X, P.Y);
+end;
+
+function TpgnQueryTab.CanLookUp: Boolean;
+begin
+  // not while a query runs: some engines share the session for metadata
+  Result := (FAdapter <> nil) and (FThread = nil) and FAdapter.IsConnected;
+end;
+
+procedure TpgnQueryTab.ClearCompletionCache;
+begin
+  if FCompCache <> nil then
+  begin
+    FCompCache.Clear;
+  end;
+  FreeAndNil(FCompContainers);
+end;
+
+function TpgnQueryTab.CachedList(const AKey: string; out AList: TStringList): Boolean;
+var
+  K: Integer;
+begin
+  K := FCompCache.IndexOf(FCurrentDb + #1 + AKey);
+  Result := K >= 0;
+  AList := nil;
+  if Result then
+  begin
+    AList := TStringList(FCompCache.Objects[K]);
+  end;
+end;
+
+function TpgnQueryTab.KeepList(const AKey: string; AList: TStringList): TStringList;
+begin
+  FCompCache.AddObject(FCurrentDb + #1 + AKey, AList);
+  Result := AList;
+end;
+
+{ A table's (or view's) columns, looked up as the database finds the name;
+  nil when it can't be found or nothing can be looked up now. }
+function TpgnQueryTab.TableColumns(const ATable: string): TStringList;
+var
+  Ref: TpgnObjectRef;
+  Via, C, D: string;
+  R: TpgnResultSet;
+  I: Integer;
+begin
+  if CachedList('T' + LowerCase(ATable), Result) then
+  begin
+    Exit;
+  end;
+  Result := nil;
+  if not CanLookUp then
+  begin
+    Exit;
+  end;
+  Result := KeepList('T' + LowerCase(ATable), TStringList.Create);
+  try
+    D := FAdapter.CurrentSchema;
+    if D = '' then
+    begin
+      D := FCurrentDb;
+    end;
+    if not FAdapter.ResolveObject(ATable, D, Ref, Via) then
+    begin
+      Exit;
+    end;
+    C := Ref.Schema;
+    if C = '' then
+    begin
+      C := Ref.Database;
+    end;
+    R := FAdapter.DescribeTable(C, Ref.Name);
+    if R = nil then
+    begin
+      Exit;
+    end;
+    try
+      for I := 0 to R.RowCount - 1 do
+      begin
+        if Length(R.Rows[I].Values) > 0 then
+        begin
+          Result.Add(R.Rows[I].Values[0]);
+        end;
+      end;
+    finally
+      R.Free;
+    end;
+  except
+    on E: Exception do
+    begin
+      // nothing to offer; the editor carries on
+      Log('Code completion could not look up ' + ATable + ': ' + E.Message);
+    end;
+  end;
+end;
+
+{ The tables and views of a schema (or database) called AName; nil when
+  AName isn't one. }
+function TpgnQueryTab.ContainerObjects(const AName: string): TStringList;
+var
+  Names: TpgnStringArray;
+  I, K: Integer;
+  Found: string;
+begin
+  Result := nil;
+  if FCompContainers = nil then
+  begin
+    if not CanLookUp then
+    begin
+      Exit;
+    end;
+    FCompContainers := TStringList.Create;
+    try
+      if FAdapter.HasSchemas then
+      begin
+        Names := FAdapter.ListSchemas(False);
+      end
+      else
+      begin
+        Names := FAdapter.ListDatabases;
+      end;
+      for I := 0 to High(Names) do
+      begin
+        FCompContainers.Add(Names[I]);
+      end;
+    except
+      on E: Exception do
+      begin
+        Log('Code completion could not list the schemas: ' + E.Message);
+      end;
+    end;
+  end;
+  Found := '';
+  for K := 0 to FCompContainers.Count - 1 do
+  begin
+    if SameText(FCompContainers[K], StringReplace(AName, '"', '', [rfReplaceAll])) then
+    begin
+      Found := FCompContainers[K];
+      Break;
+    end;
+  end;
+  if Found = '' then
+  begin
+    Exit;
+  end;
+  if CachedList('S' + Found, Result) then
+  begin
+    Exit;
+  end;
+  if not CanLookUp then
+  begin
+    Exit;
+  end;
+  Result := KeepList('S' + Found, TStringList.Create);
+  try
+    Names := FAdapter.ListObjects(Found, okTable);
+    for I := 0 to High(Names) do
+    begin
+      Result.Add(Names[I]);
+    end;
+    Names := FAdapter.ListObjects(Found, okView);
+    for I := 0 to High(Names) do
+    begin
+      Result.Add(Names[I]);
+    end;
+  except
+    on E: Exception do
+    begin
+      Log('Code completion could not list ' + Found + ': ' + E.Message);
+    end;
+  end;
+end;
+
+procedure AddNew(ATo: TStrings; AFrom: TStrings);
+var
+  I: Integer;
+begin
+  if AFrom = nil then
+  begin
+    Exit;
+  end;
+  for I := 0 to AFrom.Count - 1 do
+  begin
+    if ATo.IndexOf(AFrom[I]) < 0 then
+    begin
+      ATo.Add(AFrom[I]);
+    end;
+  end;
+end;
+
+procedure TpgnQueryTab.CompletionExecute(Sender: TObject);
+var
+  Q, Prefix, Stmt, Tbl, Txt: string;
+  A, B, K: Integer;
+  L: TStringList;
+  Words: TStringList;
+begin
+  FCompAll.Clear;
+  FCompAll.CaseSensitive := False;
+  WordAtCaret(Copy(FEditor.LineText, 1, FEditor.LogicalCaretXY.X - 1), Q, Prefix);
+  Txt := FEditor.Text;
+  Words := TStringList.Create;
+  try
+    Words.CaseSensitive := False;
+    if Q <> '' then
+    begin
+      Stmt := Txt;
+      if StatementSpanAt(Txt, CaretOffset, A, B, Dialect) then
+      begin
+        Stmt := Copy(Txt, A, B - A + 1);
+      end;
+      Tbl := TableForQualifier(Stmt, Q);
+      L := nil;
+      if Tbl <> '' then
+      begin
+        L := TableColumns(Tbl);
+      end;
+      if (L = nil) or (L.Count = 0) then
+      begin
+        L := ContainerObjects(Q);
+      end;
+      if ((L = nil) or (L.Count = 0)) and (Tbl = '') then
+      begin
+        // a table the statement doesn't name (yet)
+        L := TableColumns(Q);
+      end;
+      AddNew(FCompAll, L);
+      // what's written after it elsewhere: works with no connection too
+      WordsAfterQualifier(Txt, Q, Words);
+      if Tbl <> '' then
+      begin
+        WordsAfterQualifier(Txt, Tbl, Words);
+      end;
+      AddNew(FCompAll, Words);
+      FCompTyped := Prefix;
+      if FCompTyped = '' then
+      begin
+        FCompTyped := Q;
+        K := LastDelimiter('.', FCompTyped);
+        if K > 0 then
+        begin
+          FCompTyped := Copy(FCompTyped, K + 1, MaxInt);
+        end;
+      end;
+    end
+    else
+    begin
+      WordsInText(Txt, Words);
+      AddNew(FCompAll, Words);
+      AddNew(FCompAll, FHighlighter.TableNames);
+      FCompTyped := Prefix;
+    end;
+  finally
+    Words.Free;
+  end;
+  // not the half-typed word itself
+  K := FCompAll.IndexOf(Prefix);
+  if (Prefix <> '') and (K >= 0) and (FCompAll[K] = Prefix) then
+  begin
+    FCompAll.Delete(K);
+  end;
+  FCompAll.Sort;
+  FilterCompletion;
+end;
+
+{ The list, narrowed to the names starting with what's been typed. }
+procedure TpgnQueryTab.FilterCompletion;
+var
+  I: Integer;
+  Cur: string;
+begin
+  Cur := FCompletion.CurrentString;
+  FCompletion.ItemList.BeginUpdate;
+  try
+    FCompletion.ItemList.Clear;
+    for I := 0 to FCompAll.Count - 1 do
+    begin
+      if (Cur = '') or AnsiStartsText(Cur, FCompAll[I]) then
+      begin
+        FCompletion.ItemList.Add(MatchCase(FCompAll[I], FCompTyped + Cur));
+      end;
+    end;
+  finally
+    FCompletion.ItemList.EndUpdate;
+  end;
+end;
+
+{ A space, comma, dot or bracket typed with the list open closes it and is
+  typed as usual: only Enter, Tab or a double click put a name in. }
+procedure TpgnQueryTab.CompletionKeyPress(Sender: TObject; var UTF8Key: TUTF8Char);
+var
+  C: TUTF8Char;
+begin
+  if (UTF8Key = '') or (UTF8Key = #8) or (UTF8Key[1] < #32) or (UTF8Key[1] in ['A'..'Z', 'a'..'z', '0'..'9', '_']) or
+    (Ord(UTF8Key[1]) >= 128) then
+  begin
+    Exit;
+  end;
+  C := UTF8Key;
+  UTF8Key := '';
+  FCompletion.Deactivate;
+  FEditor.CommandProcessor(ecChar, C, nil);
+end;
+
+procedure TpgnQueryTab.CompletionTab(Sender: TObject);
+begin
+  if Assigned(FCompletion.OnValidate) then
+  begin
+    FCompletion.OnValidate(Sender, '', []);
+  end;
+end;
+
+procedure TpgnQueryTab.CompletionSearch(var APosition: Integer);
+begin
+  if FCompAll <> nil then
+  begin
+    FilterCompletion;
+  end;
+  APosition := 0;
+end;
+
 procedure TpgnQueryTab.FocusEditor;
 var
   F: TCustomForm;
@@ -1751,6 +2348,7 @@ end;
 
 procedure TpgnQueryTab.DropSession;
 begin
+  ClearCompletionCache;
   if FAdapter <> nil then
   begin
     try
@@ -3636,6 +4234,24 @@ begin
     Log('Not run');
     Exit;
   end;
+  // where each statement starts in the editor (for double-click on an
+  // error): only when they were set for exactly these statements
+  if Length(FOriginStatements) <> Length(AStatements) then
+  begin
+    FRunOrigins := nil;
+  end
+  else
+  begin
+    for I := 0 to High(AStatements) do
+    begin
+      if FOriginStatements[I] <> AStatements[I] then
+      begin
+        FRunOrigins := nil;
+        Break;
+      end;
+    end;
+  end;
+  FOriginStatements := nil;
   FResultsFile := '';
   if FSea and (FResultsMode = 2) and not FExplainRun then
   begin
@@ -3669,6 +4285,10 @@ begin
     FThread.SavepointBase := 'pgn_sp_';
     FThread.SavepointStart := FSavepointSeq;
     FThread.TransactionalDDL := Dialect in [sdPostgreSQL, sdTSQL];
+    // PostgreSQL: a savepoint before every statement too, when asked (as
+    // psql's ON_ERROR_ROLLBACK), so an error undoes only that statement
+    FThread.SavepointAll := (Dialect = sdPostgreSQL) and (SameText(FSettings.PgErrorRollback, 'on') or
+      (SameText(FSettings.PgErrorRollback, 'interactive') and FInteractiveRun));
     // MySQL's REPEATABLE READ keeps showing the first read's data until the
     // transaction ends; with nothing pending, end it so each run is fresh
     FThread.FreshSnapshot := (Dialect = sdMySQL) and (FPending = 0) and FReadsOnly;
@@ -3728,6 +4348,8 @@ end;
 procedure TpgnQueryTab.RunStatement;
 var
   S: string;
+  L1: TpgnStringArray;
+  A, B: Integer;
 begin
   if FRoutineMode then
   begin
@@ -3737,17 +4359,39 @@ begin
   S := CurrentStatement;
   if S <> '' then
   begin
-    RunSQL(S);
+    if (not FEditor.SelAvail) and CaretOnCommentLine(FEditor.Text, CaretOffset, Dialect) then
+    begin
+      Log('The cursor is on a comment: running the statement it belongs to');
+    end;
+    SetLength(L1, 1);
+    L1[0] := S;
+    if FEditor.SelAvail then
+    begin
+      SetOrigins(L1, FEditor.SelText, FEditor.SelStart, 1);
+    end
+    else if StatementSpanAt(FEditor.Text, CaretOffset, A, B, Dialect) then
+    begin
+      SetOrigins(L1, FEditor.Text, 1, A);
+    end;
+    FInteractiveRun := True;
+    try
+      RunSQL(S);
+    finally
+      FInteractiveRun := False;
+    end;
   end
   else if (not FEditor.SelAvail) and CaretOnCommentLine(FEditor.Text, CaretOffset, Dialect) then
   begin
-    Log('Nothing to run: the line under the cursor is a comment');
+    Log('Nothing to run: the comment under the cursor stands on its own (a blank line separates it ' +
+      'from the next statement)');
   end;
 end;
 
 procedure TpgnQueryTab.RunScript;
 var
   T: string;
+  Base: Integer;
+  Stmts: TpgnStringArray;
 begin
   if FRoutineMode then
   begin
@@ -3757,12 +4401,16 @@ begin
   if FEditor.SelAvail then
   begin
     T := FEditor.SelText;
+    Base := FEditor.SelStart;
   end
   else
   begin
     T := FEditor.Text;
+    Base := 1;
   end;
-  StartQuery(StatementList(T, Dialect));
+  Stmts := StatementList(T, Dialect);
+  SetOrigins(Stmts, T, Base, 1);
+  StartQuery(Stmts);
 end;
 
 procedure TpgnQueryTab.Explain;
@@ -3814,6 +4462,201 @@ end;
 function CountText(AValue: Integer): string;
 begin
   Result := FormatFloat('#,##0', AValue);
+end;
+
+{ True when an error says the session itself is gone (the server closed
+  it, the network dropped, an idle timeout), not that a statement failed. }
+function ConnectionLost(const AError: string): Boolean;
+const
+  Signs: array[0..22] of string = (
+    // PostgreSQL
+    'server closed the connection unexpectedly', 'no connection to the server',
+    'terminating connection', 'could not receive data from server', 'ssl syscall error',
+    'ssl connection has been closed unexpectedly', 'could not send data to server',
+    // MySQL
+    'server has gone away', 'lost connection to mysql server', '(2006)', '(2013)',
+    // Oracle
+    'ora-03113', 'ora-03114', 'ora-03135', 'ora-02396', 'ora-01012', 'ora-00028', 'dpi-1080',
+    // SQL Server (ODBC)
+    'communication link failure', '08s01', 'tcp provider', 'general network error',
+    'connection is broken');
+var
+  E: string;
+  I: Integer;
+begin
+  Result := False;
+  E := LowerCase(AError);
+  for I := Low(Signs) to High(Signs) do
+  begin
+    if Pos(Signs[I], E) > 0 then
+    begin
+      Result := True;
+      Exit;
+    end;
+  end;
+end;
+
+{ After a lost connection: reconnect (the password is remembered for the
+  session), and run the rest again when nothing was waiting for Commit
+  (what was waiting is gone with the old session, so running on would be
+  running without it). }
+procedure TpgnQueryTab.AskReconnect(AData: PtrInt);
+var
+  Msg: string;
+  Answer: TModalResult;
+  Again: TpgnStringArray;
+  Lost: Integer;
+  Was: TpgnConnectionInfo;
+  Db: string;
+begin
+  if (FAdapter = nil) or (FThread <> nil) then
+  begin
+    Exit;
+  end;
+  Lost := 0;
+  if not FAdapter.AutoCommit then
+  begin
+    Lost := FPending;
+  end;
+  Msg := 'The connection to ' + FInfo.Name + ' was lost:' + LineEnding + LineEnding + FLostError +
+    LineEnding + LineEnding;
+  if Lost > 0 then
+  begin
+    Msg := Msg + 'The ' + IntToStr(Lost) + ' change(s) waiting for Commit went with it (the database ' +
+      'rolls them back), so nothing is run again on its own. Reconnect, then check and run ' +
+      'what you need.';
+    Answer := QuestionDlg('Connection lost', Msg, mtWarning,
+      [mrNo, 'Reconnect', mrCancel, 'Not Now'], 0);
+  end
+  else
+  begin
+    Msg := Msg + 'Reconnect and Run Again picks up at the statement that failed.';
+    Answer := QuestionDlg('Connection lost', Msg, mtWarning,
+      [mrYes, 'Reconnect and Run Again', mrNo, 'Reconnect', mrCancel, 'Not Now'], 0);
+  end;
+  if (Answer <> mrYes) and (Answer <> mrNo) then
+  begin
+    Log('Not reconnected. Connect again from the top of the tab when you''re ready.');
+    Exit;
+  end;
+  Again := FLostStatements;
+  Was := FInfo;
+  Db := FCurrentDb;
+  // the old session's work is gone; there is nothing left to commit
+  ClearPending;
+  Screen.Cursor := crHourGlass;
+  try
+    if not ConnectTo(Was, Db) then
+    begin
+      Log('Could not reconnect to ' + Was.Name + '.');
+      Exit;
+    end;
+  finally
+    Screen.Cursor := crDefault;
+  end;
+  Log('Reconnected to ' + Was.Name + '.');
+  if (Answer = mrYes) and (Length(Again) > 0) then
+  begin
+    StartQuery(Again);
+  end;
+end;
+
+{ An error from a run: logged with where it happened (double-click goes
+  there), and PostgreSQL's ended transaction explained. }
+procedure TpgnQueryTab.LogError(T: TpgnQueryThread);
+var
+  Idx, Origin, SL, SC, EL, EC, K: Integer;
+  Txt, Where: string;
+  Undone: Boolean;
+begin
+  EL := 0;
+  EC := 0;
+  Idx := T.ErrorIndex - 1;
+  if (Idx >= 0) and (Idx <= High(FRunOrigins)) and (Idx <= High(T.Statements)) and (FRunOrigins[Idx] > 0) then
+  begin
+    Origin := FRunOrigins[Idx];
+    // where the statement starts: line and column in the editor
+    Txt := FEditor.Text;
+    EL := 1;
+    EC := 1;
+    for K := 1 to Min(Origin - 1, Length(Txt)) do
+    begin
+      if Txt[K] = #10 then
+      begin
+        Inc(EL);
+        EC := 1;
+      end
+      else if Txt[K] <> #13 then
+      begin
+        Inc(EC);
+      end;
+    end;
+    // and where in it the database says
+    if ErrorPosition(T.ErrorText, T.Statements[Idx], SL, SC) then
+    begin
+      if SL <= 1 then
+      begin
+        EC := EC + Max(SC, 1) - 1;
+      end
+      else
+      begin
+        EL := EL + SL - 1;
+        EC := Max(SC, 1);
+      end;
+    end;
+  end;
+  if EL > 0 then
+  begin
+    Where := ' at line ' + IntToStr(EL) + ', column ' + IntToStr(EC) + ' (double-click to go there)';
+  end
+  else
+  begin
+    Where := '';
+  end;
+  LogAt('ERROR' + Where + ': ' + T.ErrorText, EL, EC);
+
+  // PostgreSQL ends the whole transaction at an error
+  if (Dialect = sdPostgreSQL) and (FAdapter <> nil) and not FAdapter.AutoCommit then
+  begin
+    if Pos('current transaction is aborted', LowerCase(T.ErrorText)) > 0 then
+    begin
+      Application.QueueAsyncCall(@AskRollbackAborted, 0);
+    end
+    else
+    begin
+      Undone := False;
+      for K := 0 to T.Messages.Count - 1 do
+      begin
+        if Pos('was undone', T.Messages[K]) > 0 then
+        begin
+          Undone := True;
+        end;
+      end;
+      if not Undone then
+      begin
+        Log('WARNING: In PostgreSQL this error ended the transaction: every statement is refused until ' +
+          'you roll back (Rollback on the toolbar, or ROLLBACK;). Changes waiting for Commit go with it. ' +
+          '(Options: PostgreSQL, on error roll back just the statement.)');
+      end;
+    end;
+  end;
+end;
+
+{ A grid sorted or filtered: the status says how many rows show. }
+procedure TpgnQueryTab.GridViewChanged(Sender: TObject);
+var
+  V: string;
+begin
+  V := TpgnResultGrid(Sender).ViewText;
+  if V <> '' then
+  begin
+    FStatusText := V;
+  end
+  else
+  begin
+    FStatusText := FRowStatusText;
+  end;
+  StateChanged;
 end;
 
 procedure TpgnQueryTab.QueryDone(Sender: TObject);
@@ -3944,12 +4787,25 @@ begin
   end;
   if T.ErrorText <> '' then
   begin
-    Log('ERROR: ' + T.ErrorText);
+    LogError(T);
     FStatusText := 'Error after ' + ElapsedText(T.ElapsedMs);
+    if ConnectionLost(T.ErrorText) and not WasExplain then
+    begin
+      // from the statement that failed on
+      FLostError := T.ErrorText;
+      FLostStatements := Copy(T.Statements, Max(0, T.ErrorIndex - 1), MaxInt);
+      Application.QueueAsyncCall(@AskReconnect, 0);
+    end;
   end
   else
   begin
     FStatusText := Trim(RowInfo + '   ' + ElapsedText(T.ElapsedMs));
+    FRowStatusText := FStatusText;
+    // a sort or filter kept from the last run: say so
+    if (FResultGrids.Count > 0) and (TpgnResultGrid(FResultGrids[0]).ViewText <> '') then
+    begin
+      FStatusText := TpgnResultGrid(FResultGrids[0]).ViewText;
+    end;
   end;
 
   // a script ends with one line that says how it went
@@ -4061,6 +4917,7 @@ procedure TpgnQueryTab.PrepGrids;
       G.SaveCaption := 'Save Results &As...';
     end;
     G.OnSaveResults := @GridSaveResults;
+    G.OnViewChanged := @GridViewChanged;
   end;
 
 var
@@ -4607,6 +5464,7 @@ end;
   so tabs opened from the Explorer close without a question. }
 procedure TpgnQueryTab.SetText(const AText: string);
 begin
+  FRestored := False;
   FEditor.Text := AText;
   FEditor.Modified := False;
   FWasModified := False;
@@ -4616,6 +5474,7 @@ end;
 procedure TpgnQueryTab.LoadFromFile(const AFileName: string);
 begin
   FEditor.Lines.LoadFromFile(AFileName);
+  FRestored := False;
   FFileName := AFileName;
   FTitle := ExtractFileName(AFileName);
   FEditor.Modified := False;
@@ -4625,9 +5484,51 @@ begin
   StateChanged;
 end;
 
+procedure TpgnQueryTab.RestoreText(const AText: string);
+begin
+  FEditor.Text := AText;
+  FEditor.Modified := True;
+  FRestored := True;
+  FWasModified := IsModified;
+  FEditor.CaretXY := Point(1, 1);
+  StateChanged;
+end;
+
+procedure TpgnQueryTab.SetEditorFontSize(ASize: Integer);
+begin
+  ASize := EnsureRange(ASize, MinEditorFontSize, MaxEditorFontSize);
+  FEditor.Font.Size := ASize;
+  FMessages.Font.Size := ASize;
+end;
+
+procedure TpgnQueryTab.GoToLine(ALine: Integer);
+begin
+  ALine := EnsureRange(ALine, 1, Max(1, FEditor.Lines.Count));
+  FEditor.CaretXY := Point(1, ALine);
+  FEditor.BlockBegin := FEditor.CaretXY;
+  FEditor.BlockEnd := FEditor.CaretXY;
+  // the line a third of the way down, not on the bottom edge
+  FEditor.TopLine := Max(1, ALine - FEditor.LinesInWindow div 3);
+  FocusEditor;
+end;
+
+procedure TpgnQueryTab.EditorMouseWheel(Sender: TObject; Shift: TShiftState; WheelDelta: Integer;
+  MousePos: TPoint; var Handled: Boolean);
+begin
+  if (ssCtrl in Shift) and not (ssShift in Shift) and not (ssAlt in Shift) then
+  begin
+    if Assigned(FOnZoom) and (WheelDelta <> 0) then
+    begin
+      FOnZoom(Self, Sign(WheelDelta));
+    end;
+    Handled := True;
+  end;
+end;
+
 procedure TpgnQueryTab.SaveToFile(const AFileName: string);
 begin
   FEditor.Lines.SaveToFile(AFileName);
+  FRestored := False;
   FFileName := AFileName;
   FTitle := ExtractFileName(AFileName);
   FEditor.Modified := False;

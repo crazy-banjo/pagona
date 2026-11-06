@@ -77,7 +77,8 @@ shortcut list, 2026-10-21). Only actions that have a key are listed.
 | Ctrl+U | Upper Case | Now (command exists, no key) |
 | Ctrl+L | Lower Case | Now (command exists, no key) |
 | Ctrl+I | Initial Caps | Now |
-| Ctrl+Shift+F | Format Code | Feature (formatter) |
+| Ctrl+Shift+F | Format Code | Have (opens Format SQL...) |
+| Ctrl+Alt+F | Format with the last profile, no window | Have (Pagona's own; also in Plume) |
 | F7 | Clear All | Now |
 | F10 | Popup Menu | Now |
 | Ctrl+Shift+L | Swap This/Prev Lines | Now |
@@ -87,8 +88,8 @@ shortcut list, 2026-10-21). Only actions that have a key are listed.
 | Ctrl+Shift+BkSp / Ctrl+Shift+Del | Line delete left / right | Now |
 | Ctrl+BkSp / Ctrl+Del | Word delete left / right | Have (editor) |
 | Ctrl+T | Pick-list dropdown | Feature (completion) |
-| Ctrl+Shift+C | Code completion | Feature (completion) |
-| Ctrl+Space | Insert code template | Feature (snippets) |
+| Ctrl+Shift+C | Code completion | Ctrl+Space instead (Ctrl+Shift+C is the grid's Copy with Headers) |
+| Ctrl+Space | Insert code template | Feature (snippets); Amphibian uses it for Complete Code until then |
 | Ctrl+Shift+Up | Jump to code complement (matching BEGIN/END etc.) | Feature |
 | Ctrl+M | Make Code Statement | Feature (small) |
 | Ctrl+Shift+M | Strip Code Statement | Feature (small) |
@@ -126,7 +127,7 @@ shortcut list, 2026-10-21). Only actions that have a key are listed.
 | Ctrl+P / Ctrl+Shift+P | Print / Print Preview | Feature |
 | Ctrl+' | Focus Toolbars | Now |
 
-### Schema Browser (when it has focus)
+### Object Browser (Toad: Schema Browser; when it has focus)
 
 | Key | Toad action | Pagona status |
 |---|---|---|
@@ -166,6 +167,7 @@ call):
 | Ctrl+L | Estimated execution plan | Have |
 | Alt+F1 | sp_help (describe) on the word at the cursor | Have: opens Pagona's Describe window (Seattle look) |
 | Ctrl+K, Ctrl+C / Ctrl+K, Ctrl+U | Comment / uncomment | Have |
+| Ctrl+K, Ctrl+F / Ctrl+K, Ctrl+D | Format SQL... (window) / Format with the last profile | Have |
 | Ctrl+O / Ctrl+S | Open / Save | Have |
 | Ctrl+Tab / Ctrl+Shift+Tab | Next / previous window | Have |
 | Ctrl+A, C, V, X, Z, Y | Select all, copy, paste, cut, undo, redo | Have (editor) |
@@ -200,7 +202,7 @@ call):
 | Ctrl+M | Include actual execution plan | Feature |
 | Ctrl+D / Ctrl+T / Ctrl+Shift+F | Results to grid / text / file | Have (Seattle; Ctrl+T is no longer New Query there) |
 | Ctrl+2 | sp_lock (locks) | Feature |
-| Ctrl+J | List members (IntelliSense) | Feature (completion) |
+| Ctrl+J | List members (IntelliSense) | Have (Edit > Complete Code; Ctrl+Space too) |
 | Ctrl+Shift+R | Refresh IntelliSense cache | Feature (completion) |
 | Ctrl+K, Ctrl+X / Ctrl+K, Ctrl+S / Ctrl+K, Ctrl+B | Snippets / surround-with / snippet manager | Feature (snippets) |
 | Ctrl+Shift+M | Fill in template parameters | Feature (templates) |
