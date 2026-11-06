@@ -40,6 +40,18 @@ Priority order set by Randy (2026-10-21, reordered 2026-10-23).
 4. AI assistant (plan: ai-assistant-plan.md).
 5. Saving passwords to the Windows credential store.
 
+## Consider for the next release
+
+- Oracle/PostgreSQL Compatibility window: make the Before and After panes
+  editable, like the query editor (undo, find, comment/uncomment with the
+  keymap's keys), so a line can be commented out and Run Both tried again
+  without converting from the start. Kept read-only in 0.2.5 (Randy,
+  2026-11-06). Sketch: Run Both runs what the panes hold; a Convert Again
+  button re-converts Before with the current ticks; changing a tick or
+  Convert Again asks before replacing hand edits in After; Copy and Save
+  As take After as edited; the report says when After was edited by hand.
+  Open question: with a selection, run only the selection (as F5 does)?
+
 ## Before release
 
 - Done 2026-10-22: Release build mode in pagona.lpi (Default stays the debug build). Release: no debugger
