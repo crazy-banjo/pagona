@@ -1,0 +1,35 @@
+# Pagona - a database client for MySQL, PostgreSQL, Oracle and SQL Server
+# Copyright (C) 2026 Randy Morrow
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Runs the tests of the text engines (the Oracle/PostgreSQL converter, the
+# formatter, statement splitting) on every push: tests/README.md. Plain
+# Free Pascal on Linux, about a minute; no database, no window, and nothing
+# is built or released from here.
+
+name: Tests
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  text-engines:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Free Pascal
+        run: sudo apt-get update && sudo apt-get install -y fpc
+
+      - name: Build the test runner
+        run: |
+          mkdir -p tests/lib
+          fpc -Fusrc -FUtests/lib -FEtests tests/runtests.pas
+
+      - name: Run the tests
+        run: tests/runtests

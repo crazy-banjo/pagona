@@ -1,0 +1,16 @@
+# Lazarus / Free Pascal build output
+lib/
+bin/
+backup/
+*.lps
+*.res
+*.o
+*.ppu
+*.compiled
+*.exe
+*.dbg
+dist/
+
+# the test runner, built from tests/runtests.pas
+tests/runtests
+tests/lib/

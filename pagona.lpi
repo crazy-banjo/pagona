@@ -1,0 +1,346 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CONFIG>
+  <ProjectOptions>
+    <Version Value="12"/>
+    <General>
+      <Flags>
+        <MainUnitHasCreateFormStatements Value="False"/>
+        <MainUnitHasTitleStatement Value="False"/>
+        <MainUnitHasScaledStatement Value="False"/>
+      </Flags>
+      <SessionStorage Value="InProjectDir"/>
+      <Title Value="Pagona"/>
+      <Scaled Value="True"/>
+      <ResourceType Value="res"/>
+      <UseXPManifest Value="True"/>
+      <XPManifest>
+        <DpiAware Value="True/PM_V2"/>
+      </XPManifest>
+      <Icon Value="0"/>
+    </General>
+    <VersionInfo>
+      <UseVersionInfo Value="True"/>
+      <MinorVersionNr Value="3"/>
+      <RevisionNr Value="1"/>
+      <StringTable CompanyName="Randy Morrow" FileDescription="Pagona database client" InternalName="pagona" LegalCopyright="Copyright (C) 2026 Randy Morrow. GPL-3.0-or-later." OriginalFilename="pagona.exe" ProductName="Pagona" ProductVersion="0.3.1"/>
+    </VersionInfo>
+    <BuildModes>
+      <Item Name="Default" Default="True"/>
+      <Item Name="Release">
+        <CompilerOptions>
+          <Version Value="11"/>
+          <Target>
+            <Filename Value="bin/pagona"/>
+          </Target>
+          <SearchPaths>
+            <IncludeFiles Value="$(ProjOutDir)"/>
+            <OtherUnitFiles Value="src"/>
+            <UnitOutputDirectory Value="lib/$(TargetCPU)-$(TargetOS)-release"/>
+          </SearchPaths>
+          <CodeGeneration>
+            <SmartLinkUnit Value="True"/>
+            <Optimizations>
+              <OptimizationLevel Value="2"/>
+            </Optimizations>
+          </CodeGeneration>
+          <Linking>
+            <Debugging>
+              <GenerateDebugInfo Value="False"/>
+              <StripSymbols Value="True"/>
+            </Debugging>
+            <LinkSmart Value="True"/>
+            <Options>
+              <Win32>
+                <GraphicApplication Value="True"/>
+              </Win32>
+            </Options>
+          </Linking>
+        </CompilerOptions>
+      </Item>
+    </BuildModes>
+    <PublishOptions>
+      <Version Value="2"/>
+    </PublishOptions>
+    <RunParams>
+      <FormatVersion Value="2"/>
+    </RunParams>
+    <RequiredPackages>
+      <Item>
+        <PackageName Value="zcomponent"/>
+      </Item>
+      <Item>
+        <PackageName Value="ExtTabCtrls"/>
+      </Item>
+      <Item>
+        <PackageName Value="SynEdit"/>
+      </Item>
+      <Item>
+        <PackageName Value="LCL"/>
+      </Item>
+    </RequiredPackages>
+    <Units>
+      <Unit>
+        <Filename Value="pagona.lpr"/>
+        <IsPartOfProject Value="True"/>
+      </Unit>
+      <Unit>
+        <Filename Value="src/pgntypes.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="pgnTypes"/>
+      </Unit>
+      <Unit>
+        <Filename Value="src/pgnsqlsplit.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="pgnSqlSplit"/>
+      </Unit>
+      <Unit>
+        <Filename Value="src/pgnadapter.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="pgnAdapter"/>
+      </Unit>
+      <Unit>
+        <Filename Value="src/pgnadaptermysql.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="pgnAdapterMySQL"/>
+      </Unit>
+      <Unit>
+        <Filename Value="src/pgnadapters.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="pgnAdapters"/>
+      </Unit>
+      <Unit>
+        <Filename Value="src/pgnsettings.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="pgnSettings"/>
+      </Unit>
+      <Unit>
+        <Filename Value="src/pgnconnections.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="pgnConnections"/>
+      </Unit>
+      <Unit>
+        <Filename Value="src/pgnkeymap.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="pgnKeymap"/>
+      </Unit>
+      <Unit>
+        <Filename Value="src/pgnquerythread.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="pgnQueryThread"/>
+      </Unit>
+      <Unit>
+        <Filename Value="src/pgnconnectdlg.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="pgnConnectDlg"/>
+      </Unit>
+      <Unit>
+        <Filename Value="src/pgnmain.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="pgnMain"/>
+      </Unit>
+      <Unit>
+        <Filename Value="src/pgncolors.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="pgnColors"/>
+      </Unit>
+      <Unit>
+        <Filename Value="src/pgnoptionsdlg.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="pgnOptionsDlg"/>
+      </Unit>
+      <Unit>
+        <Filename Value="src/pgnscriptgen.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="pgnScriptGen"/>
+      </Unit>
+      <Unit>
+        <Filename Value="src/pgnquerytab.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="pgnQueryTab"/>
+      </Unit>
+      <Unit>
+        <Filename Value="src/pgnzeos.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="pgnZeos"/>
+      </Unit>
+      <Unit>
+        <Filename Value="src/pgntheme.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="pgnTheme"/>
+      </Unit>
+      <Unit>
+        <Filename Value="src/pgntoolbar.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="pgnToolbar"/>
+      </Unit>
+      <Unit>
+        <Filename Value="src/pgnstatusbar.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="pgnStatusBar"/>
+      </Unit>
+      <Unit>
+        <Filename Value="src/pgnresultgrid.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="pgnResultGrid"/>
+      </Unit>
+      <Unit>
+        <Filename Value="src/pgnroutinedlg.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="pgnRoutineDlg"/>
+      </Unit>
+      <Unit>
+        <Filename Value="src/pgnadapterpg.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="pgnAdapterPG"/>
+      </Unit>
+      <Unit>
+        <Filename Value="src/pgndbalog.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="pgnDbaLog"/>
+      </Unit>
+      <Unit>
+        <Filename Value="src/pgnusersscreen.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="pgnUsersScreen"/>
+      </Unit>
+      <Unit>
+        <Filename Value="src/pgnwhocanscreen.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="pgnWhoCanScreen"/>
+      </Unit>
+      <Unit>
+        <Filename Value="src/pgntns.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="pgnTns"/>
+      </Unit>
+      <Unit>
+        <Filename Value="src/pgnadapteroracle.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="pgnAdapterOracle"/>
+      </Unit>
+      <Unit>
+        <Filename Value="src/pgnicons.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="pgnIcons"/>
+      </Unit>
+      <Unit>
+        <Filename Value="src/pgnamphibian.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="pgnAmphibian"/>
+      </Unit>
+      <Unit>
+        <Filename Value="src/pgnconnectwin.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="pgnConnectWin"/>
+      </Unit>
+      <Unit>
+        <Filename Value="src/pgnpendingwin.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="pgnPendingWin"/>
+      </Unit>
+      <Unit>
+        <Filename Value="src/pgnmenucolor.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="pgnMenuColor"/>
+      </Unit>
+      <Unit>
+        <Filename Value="src/pgnodbc.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="pgnOdbc"/>
+      </Unit>
+      <Unit>
+        <Filename Value="src/pgnexport.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="pgnExport"/>
+      </Unit>
+      <Unit>
+        <Filename Value="src/pgndescribewin.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="pgnDescribeWin"/>
+      </Unit>
+      <Unit>
+        <Filename Value="src/pgnaboutdlg.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="pgnAboutDlg"/>
+      </Unit>
+      <Unit>
+        <Filename Value="src/pgnfindcombo.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="pgnFindCombo"/>
+      </Unit>
+      <Unit>
+        <Filename Value="src/pgnsession.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="pgnSession"/>
+      </Unit>
+      <Unit>
+        <Filename Value="src/pgnsqlformat.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="pgnSqlFormat"/>
+      </Unit>
+      <Unit>
+        <Filename Value="src/pgnjoinconvert.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="pgnJoinConvert"/>
+      </Unit>
+      <Unit>
+        <Filename Value="src/pgnconvertwin.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="pgnConvertWin"/>
+      </Unit>
+      <Unit>
+        <Filename Value="src/pgnformatdlg.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="pgnFormatDlg"/>
+      </Unit>
+      <Unit>
+        <Filename Value="src/pgnformatprofiles.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="pgnFormatProfiles"/>
+      </Unit>
+      <Unit>
+        <Filename Value="src/pgnoracleconvert.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="pgnOracleConvert"/>
+      </Unit>
+      <Unit>
+        <Filename Value="src/pgnconvertreport.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="pgnConvertReport"/>
+      </Unit>
+      <Unit>
+        <Filename Value="src/pgnerrorpos.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="pgnErrorPos"/>
+      </Unit>
+      <Unit>
+        <Filename Value="src/pgncompletion.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="pgnCompletion"/>
+      </Unit>
+      <Unit>
+        <Filename Value="src/pgnadaptermssql.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="pgnAdapterMSSQL"/>
+      </Unit>
+    </Units>
+  </ProjectOptions>
+  <CompilerOptions>
+    <Version Value="11"/>
+    <Target>
+      <Filename Value="bin/pagona"/>
+    </Target>
+    <SearchPaths>
+      <IncludeFiles Value="$(ProjOutDir)"/>
+      <OtherUnitFiles Value="src"/>
+      <UnitOutputDirectory Value="lib/$(TargetCPU)-$(TargetOS)"/>
+    </SearchPaths>
+    <Linking>
+      <Options>
+        <Win32>
+          <GraphicApplication Value="True"/>
+        </Win32>
+      </Options>
+    </Linking>
+  </CompilerOptions>
+</CONFIG>
